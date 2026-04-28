@@ -18,7 +18,7 @@ CORS(app, supports_credentials=True)
 
 # ========== SUPABASE (Main DB + Auth) ==========
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ========== ADMIN PASSWORD ==========
@@ -100,7 +100,7 @@ def call_llm(messages, provider="groq", model=None, timeout=30):
         if provider == "groq":
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            payload = {"model": model or "llama3-70b-8192", "messages": messages, "temperature": 0.7, "max_tokens": 2048}
+            payload = {"model": model or "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"], None

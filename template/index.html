@@ -10,7 +10,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <canvas id="bgCanvas"></canvas>
+  <div class="bg-aurora" aria-hidden="true"></div>
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
   <div class="shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
@@ -22,10 +23,10 @@
       </div>
       <nav class="sidebar-nav">
         <button class="nav-item" id="btnNewChat" onclick="newChat()"><span class="nav-icon">✦</span> New Chat</button>
-        <button class="nav-item" id="btnHistory" onclick="toggleHistory()"><span class="nav-icon">◎</span> History</button>
         <button class="nav-item" id="btnVoice" onclick="startVoiceInput()"><span class="nav-icon">🎙</span> Voice Input</button>
         <button class="nav-item" id="btnAuth" onclick="toggleAuthModal()"><span class="nav-icon">👤</span> Account</button>
       </nav>
+      <div class="sidebar-section-label">Recent</div>
       <div class="sidebar-history" id="historyList"></div>
       <div class="sidebar-footer">
         <div class="creator-credit">Crafted by <a href="https://portfolioofarman.netlify.app" target="_blank">Arman</a></div>
@@ -38,19 +39,22 @@
         <div class="model-pill" id="modelPill"><span class="dot"></span><span id="modelLabel">Groq</span></div>
         <div class="topbar-actions">
           <button class="icon-btn" title="Clear chat" onclick="clearChat()">⊘</button>
-          <button class="icon-btn" id="voiceBtnMobile" onclick="startVoiceInput()" style="display:none;">🎙</button>
+          <button class="icon-btn voice-mobile" id="voiceBtnMobile" onclick="startVoiceInput()" title="Voice input">🎙</button>
         </div>
       </div>
+      <button class="scroll-bottom-btn" id="scrollBottomBtn" onclick="scrollChat(true)" title="Jump to latest">↓</button>
       <div class="chat-area" id="chatArea">
         <div class="welcome" id="welcomeScreen">
-          <div class="welcome-glyph">⚡</div>
-          <h2 class="welcome-title">I'm GABA</h2>
-          <p class="welcome-sub">Ask me anything – search the web, talk via voice, or just chat.</p>
-          <div class="suggestion-grid">
-            <button class="suggestion-card" onclick="useSuggestion('Search for latest AI news')"><span class="sug-icon">🌐</span> Search latest AI news</button>
-            <button class="suggestion-card" onclick="useSuggestion('Write a Python script to automate file backup')"><span class="sug-icon">⌨</span> Python backup script</button>
-            <button class="suggestion-card" onclick="useSuggestion('Explain quantum computing in simple terms')"><span class="sug-icon">⚛</span> Quantum computing</button>
-            <button class="suggestion-card" onclick="useSuggestion('Give me 5 business ideas for 2025')"><span class="sug-icon">💡</span> Business ideas</button>
+          <div class="welcome-inner">
+            <div class="welcome-glyph">⚡</div>
+            <h2 class="welcome-title">I'm GABA</h2>
+            <p class="welcome-sub">Ask me anything — search the web, talk via voice, or just chat.</p>
+            <div class="suggestion-grid">
+              <button class="suggestion-card" onclick="useSuggestion('Search for latest AI news')"><span class="sug-icon">🌐</span><span>Latest AI news</span></button>
+              <button class="suggestion-card" onclick="useSuggestion('Write a Python script to automate file backup')"><span class="sug-icon">⌨</span><span>Python backup script</span></button>
+              <button class="suggestion-card" onclick="useSuggestion('Explain quantum computing in simple terms')"><span class="sug-icon">⚛</span><span>Quantum computing</span></button>
+              <button class="suggestion-card" onclick="useSuggestion('Give me 5 business ideas for 2025')"><span class="sug-icon">💡</span><span>Business ideas</span></button>
+            </div>
           </div>
         </div>
         <div class="messages" id="messages"></div>
@@ -58,7 +62,7 @@
       <div class="typing-indicator" id="typingIndicator"><div class="typing-dots"><span></span><span></span><span></span></div><span class="typing-text">GABA is thinking</span></div>
       <div class="input-bar">
         <div class="input-wrapper">
-          <textarea id="userInput" placeholder="Ask GABA anything…" rows="1" autofocus></textarea>
+          <textarea id="userInput" placeholder="Message GABA…" rows="1" autofocus></textarea>
           <button id="sendBtn" onclick="sendMessage()">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
           </button>

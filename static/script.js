@@ -26,13 +26,18 @@ const sidebarEl = document.getElementById('sidebar');
 const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const scrollBottomBtn = document.getElementById('scrollBottomBtn');
 
+function setChatState(hasMessages) {
+    document.body.classList.toggle('state-chat', hasMessages);
+    document.body.classList.toggle('state-welcome', !hasMessages);
+}
+
 // Restore previous conversation
 const saved = localStorage.getItem(`gaba_conv_${currentSessionId}`);
 if (saved) {
     try {
         conversationHistory = JSON.parse(saved);
         if (conversationHistory.length) {
-            welcomeScreen.classList.add('hidden');
+            setChatState(true);
             renderMessages();
         }
     } catch (e) {}
@@ -70,9 +75,8 @@ async function sendMessage() {
     userInput.value = '';
     userInput.style.height = 'auto';
     charCountSpan.innerText = '0';
-    welcomeScreen.classList.add('hidden');
+    setChatState(true);
     typingIndicator.classList.add('active');
-    modelPill.classList.add('thinking');
     stickToBottom = true;
     scrollChat(true);
     try {
@@ -100,7 +104,6 @@ async function sendMessage() {
         addMessageToUI('Network error — please try again.', 'bot');
     } finally {
         typingIndicator.classList.remove('active');
-        modelPill.classList.remove('thinking');
         sendBtn.disabled = false;
         userInput.focus();
     }
@@ -111,26 +114,9 @@ function addMessageToUI(text, sender, provider = null, animateTyping = false) {
     const msgRow = document.createElement('div');
     msgRow.className = `msg-row ${sender}`;
 
-    const avatar = document.createElement('div');
-    avatar.className = 'msg-avatar';
-    avatar.innerText = sender === 'user' ? 'U' : 'G';
-
-    const bodyDiv = document.createElement('div');
-    bodyDiv.className = 'msg-body';
-
-    const meta = document.createElement('div');
-    meta.className = 'msg-meta';
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.innerHTML = `<span>${time}</span>`;
-    if (provider && sender === 'bot') meta.innerHTML += `<span class="provider-badge">${provider}</span>`;
-
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
-
-    bodyDiv.appendChild(meta);
-    bodyDiv.appendChild(bubble);
-    msgRow.appendChild(avatar);
-    msgRow.appendChild(bodyDiv);
+    msgRow.appendChild(bubble);
     messagesDiv.appendChild(msgRow);
 
     if (animateTyping && sender === 'bot') {
@@ -253,7 +239,7 @@ function scrollChat(force = false) {
 function clearChat() {
     conversationHistory = [];
     messagesDiv.innerHTML = '';
-    welcomeScreen.classList.remove('hidden');
+    setChatState(false);
     localStorage.removeItem(`gaba_conv_${currentSessionId}`);
     renderHistory();
     showToast('Chat cleared');
@@ -261,13 +247,12 @@ function clearChat() {
 
 function newChat() {
     if (conversationHistory.length) {
-        // Persist current chat is already saved; just rotate session
         currentSessionId = Math.random().toString(36).substring(2);
         localStorage.setItem('sessionId', currentSessionId);
     }
     conversationHistory = [];
     messagesDiv.innerHTML = '';
-    welcomeScreen.classList.remove('hidden');
+    setChatState(false);
     renderHistory();
     closeSidebar();
     userInput.focus();
@@ -303,7 +288,7 @@ function loadChat(key) {
     if (!data) return;
     conversationHistory = JSON.parse(data);
     messagesDiv.innerHTML = '';
-    welcomeScreen.classList.toggle('hidden', conversationHistory.length > 0);
+    setChatState(conversationHistory.length > 0);
     renderMessages();
     currentSessionId = key.replace('gaba_conv_', '');
     localStorage.setItem('sessionId', currentSessionId);

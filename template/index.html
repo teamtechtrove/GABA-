@@ -3,82 +3,118 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-  <title>GABA – Generative AI Brain Assistant</title>
+  <title>GABA</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='12' fill='none' stroke='%23000' stroke-width='2.5'/%3E%3Cline x1='8' y1='24' x2='24' y2='8' stroke='%23000' stroke-width='2.5'/%3E%3C/svg%3E">
 </head>
-<body>
-  <div class="bg-aurora" aria-hidden="true"></div>
+<body class="state-welcome" id="appBody">
+
+  <!-- Sidebar (slides in from left) -->
   <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
-  <div class="shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-icon">⚡</div>
-        <div class="brand-text">
-          <span class="brand-name">GABA</span>
-          <span class="brand-sub">AI Brain</span>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <button class="ghost-btn" onclick="closeSidebar()" aria-label="Close menu">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <button class="ghost-btn primary-text" onclick="newChat()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        New chat
+      </button>
+    </div>
+    <div class="sidebar-section-label">Recent</div>
+    <div class="sidebar-history" id="historyList"></div>
+    <div class="sidebar-foot">
+      <button class="nav-item" id="btnAuth" onclick="toggleAuthModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        <span>Account</span>
+      </button>
+      <div class="sidebar-credit">v3.0 · by <a href="https://portfolioofarman.netlify.app" target="_blank" rel="noopener">Arman</a></div>
+    </div>
+  </aside>
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="logo-btn" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+          <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="2.5"/>
+          <line x1="8" y1="24" x2="24" y2="8" stroke="currentColor" stroke-width="2.5"/>
+        </svg>
+      </button>
+      <button class="ghost-btn topbar-newchat" onclick="newChat()" title="New chat" aria-label="New chat">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+      </button>
+    </div>
+    <div class="topbar-right">
+      <button class="pill-btn" onclick="toggleAuthModal()">Sign in</button>
+      <button class="pill-btn dark" onclick="toggleAuthModal()">Sign up</button>
+    </div>
+  </header>
+
+  <!-- Hero (welcome) -->
+  <section class="hero" id="welcomeScreen">
+    <div class="hero-logo" aria-hidden="true">
+      <svg width="44" height="44" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="2.5"/>
+        <line x1="8" y1="24" x2="24" y2="8" stroke="currentColor" stroke-width="2.5"/>
+      </svg>
+    </div>
+    <h1 class="hero-title">GABA</h1>
+  </section>
+
+  <!-- Chat messages (hidden until first send) -->
+  <main class="chat-area" id="chatArea">
+    <div class="messages" id="messages"></div>
+    <div class="typing-indicator" id="typingIndicator">
+      <div class="typing-dots"><span></span><span></span><span></span></div>
+      <span class="typing-text">GABA is thinking</span>
+    </div>
+  </main>
+
+  <button class="scroll-bottom-btn" id="scrollBottomBtn" onclick="scrollChat(true)" title="Jump to latest" aria-label="Scroll to latest">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+  </button>
+
+  <!-- Composer (Grok-style pill) -->
+  <div class="composer-wrap">
+    <form class="composer" onsubmit="event.preventDefault(); sendMessage();">
+      <button type="button" class="composer-icon" id="attachBtn" title="Attach (coming soon)" aria-label="Attach">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+      </button>
+      <textarea id="userInput" placeholder="How can I help you today?" rows="1" autofocus></textarea>
+      <div class="composer-actions">
+        <div class="model-pill" id="modelPill" title="Model">
+          <span id="modelLabel">Fast</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </div>
+        <button type="button" class="composer-icon" onclick="startVoiceInput()" title="Voice input" aria-label="Voice input">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        </button>
+        <button type="submit" class="send-btn" id="sendBtn" aria-label="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+        </button>
       </div>
-      <nav class="sidebar-nav">
-        <button class="nav-item" id="btnNewChat" onclick="newChat()"><span class="nav-icon">✦</span> New Chat</button>
-        <button class="nav-item" id="btnVoice" onclick="startVoiceInput()"><span class="nav-icon">🎙</span> Voice Input</button>
-        <button class="nav-item" id="btnAuth" onclick="toggleAuthModal()"><span class="nav-icon">👤</span> Account</button>
-      </nav>
-      <div class="sidebar-section-label">Recent</div>
-      <div class="sidebar-history" id="historyList"></div>
-      <div class="sidebar-footer">
-        <div class="creator-credit">Crafted by <a href="https://portfolioofarman.netlify.app" target="_blank">Arman</a></div>
-        <div class="version-tag">v3.0</div>
-      </div>
-    </aside>
-    <main class="main">
-      <div class="topbar">
-        <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()"><span></span><span></span><span></span></button>
-        <div class="model-pill" id="modelPill"><span class="dot"></span><span id="modelLabel">Groq</span></div>
-        <div class="topbar-actions">
-          <button class="icon-btn" title="Clear chat" onclick="clearChat()">⊘</button>
-          <button class="icon-btn voice-mobile" id="voiceBtnMobile" onclick="startVoiceInput()" title="Voice input">🎙</button>
-        </div>
-      </div>
-      <button class="scroll-bottom-btn" id="scrollBottomBtn" onclick="scrollChat(true)" title="Jump to latest">↓</button>
-      <div class="chat-area" id="chatArea">
-        <div class="welcome" id="welcomeScreen">
-          <div class="welcome-inner">
-            <div class="welcome-glyph">⚡</div>
-            <h2 class="welcome-title">I'm GABA</h2>
-            <p class="welcome-sub">Ask me anything — search the web, talk via voice, or just chat.</p>
-            <div class="suggestion-grid">
-              <button class="suggestion-card" onclick="useSuggestion('Search for latest AI news')"><span class="sug-icon">🌐</span><span>Latest AI news</span></button>
-              <button class="suggestion-card" onclick="useSuggestion('Write a Python script to automate file backup')"><span class="sug-icon">⌨</span><span>Python backup script</span></button>
-              <button class="suggestion-card" onclick="useSuggestion('Explain quantum computing in simple terms')"><span class="sug-icon">⚛</span><span>Quantum computing</span></button>
-              <button class="suggestion-card" onclick="useSuggestion('Give me 5 business ideas for 2025')"><span class="sug-icon">💡</span><span>Business ideas</span></button>
-            </div>
-          </div>
-        </div>
-        <div class="messages" id="messages"></div>
-      </div>
-      <div class="typing-indicator" id="typingIndicator"><div class="typing-dots"><span></span><span></span><span></span></div><span class="typing-text">GABA is thinking</span></div>
-      <div class="input-bar">
-        <div class="input-wrapper">
-          <textarea id="userInput" placeholder="Message GABA…" rows="1" autofocus></textarea>
-          <button id="sendBtn" onclick="sendMessage()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-          </button>
-        </div>
-        <p class="input-hint"><span id="charCount">0</span>/4000 · Enter to send · Shift+Enter newline</p>
-      </div>
-    </main>
+    </form>
+    <p class="composer-hint">
+      <span class="char-counter"><span id="charCount">0</span>/4000</span>
+      <span>By messaging GABA, you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.</span>
+    </p>
   </div>
+
+  <!-- Hidden helpers (kept for script.js compatibility) -->
+  <button class="voice-mobile-stub" id="voiceBtnMobile" onclick="startVoiceInput()" hidden></button>
 
   <!-- Auth Modal -->
   <div id="authModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <div class="modal-content">
-      <span class="modal-close" onclick="closeAuthModal()" role="button" aria-label="Close">&times;</span>
-      <h2 id="authTitle">Account</h2>
-      <div id="authStatus">Loading…</div>
+      <button class="modal-close" onclick="closeAuthModal()" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <h2 id="authTitle">Welcome to GABA</h2>
+      <p class="modal-sub" id="authStatus">Sign in to save your chats</p>
       <form id="authForm" autocomplete="on" onsubmit="event.preventDefault(); document.getElementById('authLoginBtn').click();">
         <input type="email" id="authEmail" placeholder="Email" class="admin-input" autocomplete="email" required>
         <input type="password" id="authPassword" placeholder="Password" class="admin-input" autocomplete="current-password" required>
@@ -94,7 +130,10 @@
 
   <!-- Hidden Admin Panel -->
   <div id="adminPanel" class="admin-panel">
-    <div class="admin-header"><div class="admin-title"><span class="admin-icon">🔐</span><span>Admin Console</span></div><button class="admin-close" id="adminClose">✕</button></div>
+    <div class="admin-header">
+      <div class="admin-title"><span>Admin Console</span></div>
+      <button class="admin-close" id="adminClose">✕</button>
+    </div>
     <div id="adminContent" class="admin-content"></div>
   </div>
   <div id="adminHotspot"></div>

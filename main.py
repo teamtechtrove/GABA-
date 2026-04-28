@@ -309,13 +309,18 @@ def provider_order():
 @app.route("/admin/stats", methods=["GET"])
 @admin_required
 def stats():
-    conv_count = supabase.table("conversations").select("id", count="exact").execute()
-    key_count = supabase.table("api_keys").select("id", count="exact").eq("is_active", True).execute()
-    user_count = supabase.table("users").select("id", count="exact").execute()
+    def safe_count(table, **filters):
+        try:
+            q = supabase.table(table).select("id", count="exact")
+            for k, v in filters.items():
+                q = q.eq(k, v)
+            return q.execute().count or 0
+        except Exception:
+            return 0
     return jsonify({
-        "total_conversations": conv_count.count or 0,
-        "active_api_keys": key_count.count or 0,
-        "total_users": user_count.count or 0,
+        "total_conversations": safe_count("conversations"),
+        "active_api_keys": safe_count("api_keys", is_active=True),
+        "total_users": safe_count("users"),
         "rate_limited_ips": len(RATE_STORE)
     })
 
@@ -331,4 +336,5 @@ def health():
     return jsonify({"status": "ok", "version": "3.0"})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)

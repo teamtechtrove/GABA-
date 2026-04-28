@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
 </head>
 <body>
   <div class="bg-aurora" aria-hidden="true"></div>
@@ -73,20 +74,20 @@
   </div>
 
   <!-- Auth Modal -->
-  <div id="authModal" class="modal">
+  <div id="authModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <div class="modal-content">
-      <span class="modal-close" onclick="closeAuthModal()">&times;</span>
-      <h2>Account</h2>
-      <div id="authStatus">Loading...</div>
-      <div id="authForm">
-        <input type="email" id="authEmail" placeholder="Email" class="admin-input" style="margin-bottom:8px;">
-        <input type="password" id="authPassword" placeholder="Password" class="admin-input" style="margin-bottom:8px;">
-        <button class="admin-btn admin-btn-primary" id="authLoginBtn">Login</button>
-        <button class="admin-btn admin-btn-ghost" id="authSignupBtn">Sign Up</button>
-      </div>
+      <span class="modal-close" onclick="closeAuthModal()" role="button" aria-label="Close">&times;</span>
+      <h2 id="authTitle">Account</h2>
+      <div id="authStatus">Loading…</div>
+      <form id="authForm" autocomplete="on" onsubmit="event.preventDefault(); document.getElementById('authLoginBtn').click();">
+        <input type="email" id="authEmail" placeholder="Email" class="admin-input" autocomplete="email" required>
+        <input type="password" id="authPassword" placeholder="Password" class="admin-input" autocomplete="current-password" required>
+        <button type="submit" class="admin-btn admin-btn-primary" id="authLoginBtn">Sign In</button>
+        <button type="button" class="admin-btn admin-btn-ghost" id="authSignupBtn">Create Account</button>
+      </form>
       <div id="authLoggedIn" style="display:none;">
-        <p>Logged in as <span id="userEmail"></span></p>
-        <button class="admin-btn admin-btn-danger" id="authLogoutBtn">Logout</button>
+        <p>Signed in as <span id="userEmail"></span></p>
+        <button class="admin-btn admin-btn-danger" id="authLogoutBtn">Sign Out</button>
       </div>
     </div>
   </div>

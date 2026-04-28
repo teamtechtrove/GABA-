@@ -522,7 +522,7 @@ function closeSidebar() {
 function useSuggestion(txt) {
     userInput.value = txt;
     userInput.dispatchEvent(new Event('input'));
-    userInput.focus();
+    sendMessage();
 }
 
 // Expose handlers used from inline onclicks

@@ -1,0 +1,7 @@
+Flask==2.3.2
+fla==4.0.0
+requests==2.31.0
+supabase-py==1.1.0
+flask-cors
+supabase
+pip install -r requirements.txt

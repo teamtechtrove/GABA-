@@ -77,6 +77,7 @@ async function sendMessage() {
     charCountSpan.innerText = '0';
     setChatState(true);
     typingIndicator.classList.add('active');
+    if (modelPill) modelPill.classList.add('thinking');
     stickToBottom = true;
     scrollChat(true);
     try {
@@ -104,19 +105,39 @@ async function sendMessage() {
         addMessageToUI('Network error — please try again.', 'bot');
     } finally {
         typingIndicator.classList.remove('active');
+        if (modelPill) modelPill.classList.remove('thinking');
         sendBtn.disabled = false;
         userInput.focus();
     }
 }
 
 // ===== Render =====
+const BOT_AVATAR_SVG = '<svg width="14" height="14" viewBox="0 0 32 32"><defs><linearGradient id="ba" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#64f0ff"/><stop offset=".55" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/></linearGradient></defs><path fill="url(#ba)" d="M18 2 L6 18 h8 l-2 12 12-16 h-8 z"/></svg>';
+
 function addMessageToUI(text, sender, provider = null, animateTyping = false) {
     const msgRow = document.createElement('div');
     msgRow.className = `msg-row ${sender}`;
 
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.innerHTML = sender === 'user' ? (userEmail ? userEmail[0].toUpperCase() : 'U') : BOT_AVATAR_SVG;
+
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'msg-body';
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    meta.innerHTML = `<span>${sender === 'user' ? 'You' : 'GABA'} · ${time}</span>`;
+    if (provider && sender === 'bot') meta.innerHTML += `<span class="provider-badge">${provider}</span>`;
+
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
-    msgRow.appendChild(bubble);
+
+    bodyDiv.appendChild(meta);
+    bodyDiv.appendChild(bubble);
+    msgRow.appendChild(avatar);
+    msgRow.appendChild(bodyDiv);
     messagesDiv.appendChild(msgRow);
 
     if (animateTyping && sender === 'bot') {

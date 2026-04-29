@@ -13,13 +13,20 @@ Live creator: **Arman** — https://portfolioofarman.netlify.app
 - **Web search tool**: DuckDuckGo HTML scrape, auto-triggered when the user says "search", "find online", "google"
 - **Supabase auth** for user accounts (signup/login/logout/me) — uses the service-role key
 - **Supabase database** for: `api_keys`, `system_settings`, `users`, `conversations`
-- **Hidden admin panel** (double-click bottom-left 32×32 hotspot, then enter `ADMIN_PASSWORD`)
-  - Stats: conversations, active keys, users, rate-limited IPs
-  - API key CRUD per provider (auto-deactivates old keys)
-  - Provider priority drag-drop reorder
-  - Manual backup trigger
-- **Safety**: hardened system prompt + jailbreak regex blocklist + output sanitisation that redacts leaked secrets
-- **Rate limiting**: 30 messages / 60 s per IP
+- **Admin console** (small lock icon, bottom-left of chat area → password prompt)
+  - **Dashboard**: live stats + 1-click provider probe (latency + reply preview) + clear-rate-limit-cache
+  - **Keys**: API key CRUD per provider with per-row "Test" button
+  - **Providers**: drag-drop fallback order + per-provider enable/disable toggle
+  - **Settings**: web-search on/off, sign-up open/closed, rate limit per IP per minute (1–600)
+  - **Prompt**: live system-prompt editor (8000 char) with default reset; takes effect immediately on next chat
+  - **Users**: list, search, conversation count per user, delete user (cascades to conversations + Supabase Auth)
+  - **Chats**: search & view recent conversations with provider chips, delete log entries
+  - **Backup**: manual project bundle to Supabase Storage / GitHub
+  - **Exports**: download users / conversations / settings as JSON
+  - **Password**: change admin password (stored as SHA-256 hash in `system_settings`, overrides env var)
+- **Settings cache**: 15s in-memory TTL on the `system_settings` table to keep chat path fast
+- **Safety**: hardened system prompt (overridable from admin) + jailbreak regex blocklist + output sanitisation that redacts leaked secrets
+- **Rate limiting**: configurable per-IP per-minute (default 30, range 1–600)
 
 ### Frontend (`template/index.html`, `static/style.css`, `static/script.js`)
 - Premium dark theme with animated gradient orbs, glassmorphism cards, grid background

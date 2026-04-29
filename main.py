@@ -24,6 +24,64 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ========== ADMIN PASSWORD ==========
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "GABAadmin2025!")
 
+# ========== SETTINGS STORE (cached) ==========
+_SETTINGS_CACHE = {"data": {}, "expires": 0.0}
+_SETTINGS_TTL = 15  # seconds
+
+def _load_settings():
+    now = time.time()
+    if _SETTINGS_CACHE["expires"] > now:
+        return _SETTINGS_CACHE["data"]
+    try:
+        res = supabase.table("system_settings").select("key,value").execute()
+        d = {row["key"]: row["value"] for row in (res.data or [])}
+    except Exception:
+        d = {}
+    _SETTINGS_CACHE["data"] = d
+    _SETTINGS_CACHE["expires"] = now + _SETTINGS_TTL
+    return d
+
+def _invalidate_settings():
+    _SETTINGS_CACHE["expires"] = 0.0
+
+def get_setting(key, default=None, cast=None):
+    raw = _load_settings().get(key)
+    if raw is None:
+        return default
+    if cast is None:
+        return raw
+    try:
+        if cast is bool:
+            return str(raw).lower() in ("1", "true", "yes", "on")
+        if cast is int:
+            return int(raw)
+        if cast is float:
+            return float(raw)
+        if cast is list or cast is dict:
+            return json.loads(raw)
+        return cast(raw)
+    except Exception:
+        return default
+
+def set_setting(key, value):
+    if isinstance(value, (list, dict)):
+        value = json.dumps(value)
+    elif isinstance(value, bool):
+        value = "true" if value else "false"
+    else:
+        value = str(value)
+    supabase.table("system_settings").upsert({"key": key, "value": value}).execute()
+    _invalidate_settings()
+
+def hash_pwd(pwd):
+    return hashlib.sha256(pwd.encode("utf-8")).hexdigest()
+
+def verify_admin_password(pwd):
+    override = get_setting("admin_password_hash")
+    if override:
+        return hmac.compare_digest(override, hash_pwd(pwd))
+    return hmac.compare_digest(ADMIN_PASSWORD, pwd or "")
+
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -34,20 +92,20 @@ def admin_required(f):
 
 # ========== RATE LIMITING ==========
 RATE_STORE = {}
-RATE_LIMIT = 30
 RATE_WINDOW = 60
 
 def is_rate_limited(ip):
+    limit = get_setting("rate_limit_per_min", 30, int) or 30
     now = time.time()
     history = [t for t in RATE_STORE.get(ip, []) if now - t < RATE_WINDOW]
     RATE_STORE[ip] = history
-    if len(history) >= RATE_LIMIT:
+    if len(history) >= limit:
         return True
     RATE_STORE[ip].append(now)
     return False
 
 # ========== SAFETY ==========
-SAFETY_SYSTEM_PROMPT = """You are GABA — a fast, friendly, multi-model AI assistant created by Arman (https://portfolioofarman.netlify.app).
+DEFAULT_SAFETY_SYSTEM_PROMPT = """You are GABA — a fast, friendly, multi-model AI assistant created by Arman (https://portfolioofarman.netlify.app).
 
 How you respond:
 - Be clear, structured, and helpful. Use short paragraphs, bullet lists, and headings when it improves readability.
@@ -64,6 +122,12 @@ Safety (non-negotiable):
 - Do not impersonate real people in defamatory or deceptive ways.
 
 If unsure whether something is safe, choose the safer answer."""
+
+def get_active_system_prompt():
+    custom = get_setting("system_prompt")
+    if custom and isinstance(custom, str) and custom.strip():
+        return custom
+    return DEFAULT_SAFETY_SYSTEM_PROMPT
 
 DANGEROUS_PATTERNS = [
     r"ignore (all |previous |your |any )?(instructions|rules|guidelines|constraints|prompts?)",
@@ -132,7 +196,7 @@ def call_llm(messages, provider="groq", model=None, timeout=30):
         elif provider == "claude":
             url = "https://api.anthropic.com/v1/messages"
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-            system = next((m["content"] for m in messages if m["role"] == "system"), SAFETY_SYSTEM_PROMPT)
+            system = next((m["content"] for m in messages if m["role"] == "system"), get_active_system_prompt())
             user_msgs = [m for m in messages if m["role"] != "system"]
             payload = {"model": model or "claude-3-haiku-20240307", "system": system, "messages": user_msgs, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
@@ -180,17 +244,21 @@ def agent_response(user_input, history, user_id=None):
     if is_dangerous(user_input):
         return {"reply": "⚠️ I can't respond to that. Please keep our conversation safe.", "provider": "safety"}
 
-    # Check if user wants to search the web
-    lower_input = user_input.lower()
-    if "search" in lower_input or "find online" in lower_input or "google" in lower_input:
-        query = user_input.replace("search", "").replace("find online", "").replace("google", "").strip()
-        if query:
-            search_result = web_search(query)
-            user_input = f"User asked to search for: {query}\nSearch results:\n{search_result}\nBased on these results, answer the user's query naturally."
+    # Web search (only if feature enabled)
+    if get_setting("feature_web_search", True, bool):
+        lower_input = user_input.lower()
+        if "search" in lower_input or "find online" in lower_input or "google" in lower_input:
+            query = user_input.replace("search", "").replace("find online", "").replace("google", "").strip()
+            if query:
+                search_result = web_search(query)
+                user_input = f"User asked to search for: {query}\nSearch results:\n{search_result}\nBased on these results, answer the user's query naturally."
 
-    messages = [{"role": "system", "content": SAFETY_SYSTEM_PROMPT}] + history[-20:] + [{"role": "user", "content": user_input}]
+    messages = [{"role": "system", "content": get_active_system_prompt()}] + history[-20:] + [{"role": "user", "content": user_input}]
     provider_order = get_provider_order()
+    disabled = set(get_setting("disabled_providers", [], list) or [])
     for provider in provider_order:
+        if provider in disabled:
+            continue
         reply, err = call_llm(messages, provider)
         if reply:
             return {"reply": sanitize_output(reply), "provider": provider}
@@ -199,6 +267,8 @@ def agent_response(user_input, history, user_id=None):
 # ========== SUPABASE AUTH (User accounts) ==========
 @app.route("/auth/signup", methods=["POST"])
 def signup():
+    if not get_setting("feature_signup_open", True, bool):
+        return jsonify({"error": "Sign-ups are currently disabled by the admin."}), 403
     data = request.json
     email = data.get("email")
     password = data.get("password")
@@ -276,8 +346,8 @@ def home():
 # ========== ADMIN PANEL ==========
 @app.route("/admin/login", methods=["POST"])
 def admin_login():
-    pwd = request.json.get("password")
-    if pwd == ADMIN_PASSWORD:
+    pwd = request.json.get("password") or ""
+    if verify_admin_password(pwd):
         session["is_admin"] = True
         return jsonify({"status": "ok"})
     return jsonify({"error": "Wrong password"}), 403
@@ -354,6 +424,206 @@ def manual_backup():
     import subprocess
     result = subprocess.run(["python", "backup.py"], capture_output=True, text=True, timeout=120)
     return jsonify({"output": result.stdout[-2000:], "error": result.stderr[-1000:]})
+
+# ========== ADMIN: feature settings ==========
+@app.route("/admin/settings", methods=["GET", "POST"])
+@admin_required
+def admin_settings():
+    if request.method == "GET":
+        return jsonify({
+            "feature_web_search":  get_setting("feature_web_search",  True, bool),
+            "feature_signup_open": get_setting("feature_signup_open", True, bool),
+            "rate_limit_per_min":  get_setting("rate_limit_per_min",  30,   int),
+            "disabled_providers":  get_setting("disabled_providers",  [],   list) or [],
+        })
+    data = request.json or {}
+    if "feature_web_search"  in data: set_setting("feature_web_search",  bool(data["feature_web_search"]))
+    if "feature_signup_open" in data: set_setting("feature_signup_open", bool(data["feature_signup_open"]))
+    if "rate_limit_per_min"  in data:
+        try: set_setting("rate_limit_per_min", max(1, min(600, int(data["rate_limit_per_min"]))))
+        except Exception: pass
+    if "disabled_providers"  in data and isinstance(data["disabled_providers"], list):
+        set_setting("disabled_providers", [str(p).lower() for p in data["disabled_providers"]])
+    return jsonify({"status": "ok"})
+
+# ========== ADMIN: system prompt ==========
+@app.route("/admin/system_prompt", methods=["GET", "POST"])
+@admin_required
+def admin_system_prompt():
+    if request.method == "GET":
+        return jsonify({
+            "active":  get_active_system_prompt(),
+            "default": DEFAULT_SAFETY_SYSTEM_PROMPT,
+            "is_custom": bool(get_setting("system_prompt")),
+        })
+    new_p = (request.json or {}).get("prompt", "").strip()
+    if not new_p:
+        return jsonify({"error": "Prompt cannot be empty"}), 400
+    if len(new_p) > 8000:
+        return jsonify({"error": "Prompt too long (max 8000 chars)"}), 400
+    set_setting("system_prompt", new_p)
+    return jsonify({"status": "ok"})
+
+@app.route("/admin/system_prompt/reset", methods=["POST"])
+@admin_required
+def admin_system_prompt_reset():
+    try:
+        supabase.table("system_settings").delete().eq("key", "system_prompt").execute()
+    except Exception:
+        pass
+    _invalidate_settings()
+    return jsonify({"status": "ok"})
+
+# ========== ADMIN: live test of a single provider ==========
+@app.route("/admin/test_provider", methods=["POST"])
+@admin_required
+def admin_test_provider():
+    data = request.json or {}
+    provider = (data.get("provider") or "").lower().strip()
+    msg = (data.get("message") or "Reply with one short sentence saying 'GABA test successful via {provider}.'").format(provider=provider)
+    if provider not in ("groq", "openai", "claude", "gemini", "deepseek"):
+        return jsonify({"error": "Unknown provider"}), 400
+    messages = [
+        {"role": "system", "content": get_active_system_prompt()},
+        {"role": "user", "content": msg},
+    ]
+    t0 = time.time()
+    reply, err = call_llm(messages, provider, timeout=20)
+    elapsed_ms = int((time.time() - t0) * 1000)
+    return jsonify({
+        "provider": provider,
+        "ok": reply is not None,
+        "reply": reply or "",
+        "error": err or "",
+        "latency_ms": elapsed_ms,
+    })
+
+# ========== ADMIN: rate-limit cache ==========
+@app.route("/admin/clear_rate_limit", methods=["POST"])
+@admin_required
+def admin_clear_rate_limit():
+    n = len(RATE_STORE)
+    RATE_STORE.clear()
+    return jsonify({"status": "ok", "cleared": n})
+
+# ========== ADMIN: change password ==========
+@app.route("/admin/change_password", methods=["POST"])
+@admin_required
+def admin_change_password():
+    data = request.json or {}
+    cur = data.get("current") or ""
+    new = data.get("new") or ""
+    if not verify_admin_password(cur):
+        return jsonify({"error": "Current password is incorrect"}), 403
+    if len(new) < 8:
+        return jsonify({"error": "New password must be at least 8 characters"}), 400
+    set_setting("admin_password_hash", hash_pwd(new))
+    return jsonify({"status": "ok"})
+
+# ========== ADMIN: users ==========
+def _list_auth_users(limit=200):
+    """Try Supabase Auth admin API first; fall back to public 'users' table."""
+    try:
+        res = supabase.auth.admin.list_users()
+        users = []
+        raw = res if isinstance(res, list) else getattr(res, "users", None) or getattr(res, "data", None) or []
+        for u in raw[:limit]:
+            uid    = getattr(u, "id", None)        or (u.get("id") if isinstance(u, dict) else None)
+            email  = getattr(u, "email", None)     or (u.get("email") if isinstance(u, dict) else None)
+            cat    = getattr(u, "created_at", None) or (u.get("created_at") if isinstance(u, dict) else None)
+            lsi    = getattr(u, "last_sign_in_at", None) or (u.get("last_sign_in_at") if isinstance(u, dict) else None)
+            users.append({"id": str(uid) if uid else None, "email": email, "created_at": str(cat) if cat else None, "last_sign_in_at": str(lsi) if lsi else None})
+        return users
+    except Exception:
+        pass
+    try:
+        res = supabase.table("users").select("*").limit(limit).execute()
+        return [{"id": str(r.get("id")), "email": r.get("email"), "created_at": str(r.get("created_at") or "")} for r in (res.data or [])]
+    except Exception:
+        return []
+
+@app.route("/admin/users", methods=["GET"])
+@admin_required
+def admin_users():
+    users = _list_auth_users(200)
+    # attach conversation counts
+    counts = {}
+    try:
+        res = supabase.table("conversations").select("user_id").limit(5000).execute()
+        for r in (res.data or []):
+            uid = r.get("user_id")
+            if uid:
+                counts[str(uid)] = counts.get(str(uid), 0) + 1
+    except Exception:
+        pass
+    for u in users:
+        u["conv_count"] = counts.get(str(u.get("id")), 0)
+    users.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return jsonify(users)
+
+@app.route("/admin/users/<user_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_user(user_id):
+    deleted_convs = 0
+    try:
+        c = supabase.table("conversations").delete().eq("user_id", user_id).execute()
+        deleted_convs = len(c.data or [])
+    except Exception:
+        pass
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception as e:
+        try:
+            supabase.table("users").delete().eq("id", user_id).execute()
+        except Exception:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "ok", "conversations_deleted": deleted_convs})
+
+# ========== ADMIN: conversations ==========
+@app.route("/admin/conversations", methods=["GET"])
+@admin_required
+def admin_conversations():
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except Exception:
+        limit = 50
+    limit = max(1, min(500, limit))
+    try:
+        query = supabase.table("conversations").select("id,user_id,user_message,bot_reply,provider_used,created_at").order("created_at", desc=True).limit(limit)
+        res = query.execute()
+        rows = res.data or []
+        if q:
+            ql = q.lower()
+            rows = [r for r in rows if ql in (r.get("user_message") or "").lower() or ql in (r.get("bot_reply") or "").lower()]
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e), "rows": []}), 500
+
+@app.route("/admin/conversations/<conv_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_conversation(conv_id):
+    try:
+        supabase.table("conversations").delete().eq("id", conv_id).execute()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== ADMIN: exports ==========
+@app.route("/admin/export/<kind>", methods=["GET"])
+@admin_required
+def admin_export(kind):
+    if kind == "users":
+        return jsonify(_list_auth_users(2000))
+    if kind == "conversations":
+        try:
+            res = supabase.table("conversations").select("*").order("created_at", desc=True).limit(5000).execute()
+            return jsonify(res.data or [])
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    if kind == "settings":
+        return jsonify(_load_settings())
+    return jsonify({"error": "Unknown export kind"}), 400
 
 @app.route("/health")
 def health():

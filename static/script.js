@@ -514,25 +514,35 @@ async function doLogout(){
   } catch(_){ showToast('Logout failed.', 'error'); }
 }
 
-// ===== admin (hidden trigger: double-click bottom-left) =====
-function bindAdminHotspot(){
-  // Use both the explicit hotspot and a wider zone
-  const hotspot = $('adminHotspot');
-  if (hotspot) hotspot.addEventListener('dblclick', openAdmin);
-  document.addEventListener('dblclick', e => {
-    if (e.clientX < 80 && (window.innerHeight - e.clientY) < 80) openAdmin();
-  });
-}
+// ===== admin (visible lock button trigger) =====
+const ALL_PROVIDERS = ['groq','openai','claude','gemini','deepseek'];
+let adminTab = 'dashboard';
+let adminCache = { stats:null, keys:[], order:[], settings:null, prompt:null, users:[], conversations:[] };
+
+function bindAdminHotspot(){ /* deprecated; kept for backward bootstrap call */ }
+
 function closeAdmin(){ $('adminPanel').style.display = 'none'; }
 async function openAdmin(){
   $('adminPanel').style.display = 'flex';
-  // Probe whether already-authed
   try {
     const r = await fetch('/admin/stats');
-    if (r.ok){ adminLoggedIn = true; }
+    if (r.ok) adminLoggedIn = true;
   } catch(_){}
   await renderAdminContent();
 }
+
+function adminTabs(active){
+  const tabs = [
+    ['dashboard','Dashboard'],['keys','Keys'],['providers','Providers'],
+    ['settings','Settings'],['prompt','Prompt'],['users','Users'],
+    ['conversations','Chats'],['backup','Backup'],['password','Password'],
+  ];
+  return `<div class="adm-tabs">${tabs.map(([id,label]) =>
+    `<button class="adm-tab${active===id?' active':''}" onclick="setAdminTab('${id}')">${label}</button>`
+  ).join('')}</div>`;
+}
+
+async function setAdminTab(id){ adminTab = id; await renderAdminContent(); }
 
 async function renderAdminContent(){
   const body = $('adminBody');
@@ -551,94 +561,191 @@ async function renderAdminContent(){
     return;
   }
 
-  // Fetch live data from backend
-  let stats = {}, keys = [], order = providerOrderCache;
-  try {
-    const [s, k, o] = await Promise.all([
-      fetch('/admin/stats').then(r => r.json()),
-      fetch('/admin/api_keys').then(r => r.json()),
-      fetch('/admin/provider_order').then(r => r.json()),
-    ]);
-    stats = s || {};
-    keys = Array.isArray(k) ? k : ((k && k.keys) || []);
-    if (Array.isArray(o)) { order = o; providerOrderCache = order; }
-    else if (o && Array.isArray(o.order)) { order = o.order; providerOrderCache = order; }
-  } catch(_){}
+  body.innerHTML = adminTabs(adminTab) + `<div id="admTabBody"></div>`;
 
-  body.innerHTML = `
+  switch (adminTab){
+    case 'dashboard':     return renderTabDashboard();
+    case 'keys':          return renderTabKeys();
+    case 'providers':     return renderTabProviders();
+    case 'settings':      return renderTabSettings();
+    case 'prompt':        return renderTabPrompt();
+    case 'users':         return renderTabUsers();
+    case 'conversations': return renderTabConversations();
+    case 'backup':        return renderTabBackup();
+    case 'password':      return renderTabPassword();
+  }
+}
+
+// ---------- Dashboard ----------
+async function renderTabDashboard(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  let stats = {};
+  try { stats = await fetch('/admin/stats').then(r=>r.json()); } catch(_){}
+  adminCache.stats = stats;
+  tb.innerHTML = `
     <div class="panel-section">
-      <div class="panel-section-title">📊 System Stats</div>
+      <div class="panel-section-title">📊 Live System Stats</div>
       <div class="stat-row"><span>Conversations</span><span class="stat-val">${stats.total_conversations ?? '—'}</span></div>
-      <div class="stat-row"><span>Active API keys</span><span class="stat-val">${stats.active_api_keys ?? keys.filter(k=>k.is_active).length}</span></div>
-      <div class="stat-row"><span>Users</span><span class="stat-val">${stats.total_users ?? '—'}</span></div>
+      <div class="stat-row"><span>Active API keys</span><span class="stat-val">${stats.active_api_keys ?? '—'}</span></div>
+      <div class="stat-row"><span>Total users</span><span class="stat-val">${stats.total_users ?? '—'}</span></div>
       <div class="stat-row"><span>Rate-limited IPs</span><span class="stat-val">${stats.rate_limited_ips ?? 0}</span></div>
+      <div class="btn-row-tight">
+        <button class="adm-mini" onclick="renderTabDashboard()">↻ Refresh</button>
+        <button class="adm-mini danger" onclick="clearRateLimit()">Clear rate-limit cache</button>
+        <button class="adm-mini" onclick="adminLogout()">Sign out</button>
+      </div>
     </div>
-
     <div class="panel-section">
-      <div class="panel-section-title">🔑 API Keys</div>
-      <ul class="key-list" id="keyListAdmin"></ul>
+      <div class="panel-section-title">⚡ Quick Provider Test</div>
+      <p style="font-size:11px;color:var(--chalk-4);font-family:var(--mono);margin-bottom:8px">Send a probe message through any provider and see latency + reply.</p>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <select id="quickTestProv" class="inp" style="flex:1;cursor:pointer">
+          ${ALL_PROVIDERS.map(p=>`<option value="${p}">${p}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary" onclick="quickTestProvider()" style="white-space:nowrap">Run Test</button>
+      </div>
+      <div id="quickTestOut" class="adm-test-out" style="display:none"></div>
+    </div>`;
+}
+
+async function clearRateLimit(){
+  try {
+    const r = await fetch('/admin/clear_rate_limit', {method:'POST'});
+    const d = await r.json();
+    showToast(`Cleared ${d.cleared ?? 0} IP entries`, 'success');
+    renderTabDashboard();
+  } catch(_){ showToast('Failed', 'error'); }
+}
+
+async function quickTestProvider(){
+  const provider = $('quickTestProv').value;
+  const out = $('quickTestOut');
+  out.style.display = 'block';
+  out.className = 'adm-test-out';
+  out.textContent = `Testing ${provider}…`;
+  try {
+    const r = await fetch('/admin/test_provider', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ provider })
+    });
+    const d = await r.json();
+    if (d.ok){
+      out.className = 'adm-test-out ok';
+      out.textContent = `✅ ${provider} · ${d.latency_ms}ms\n\n${d.reply}`;
+    } else {
+      out.className = 'adm-test-out fail';
+      out.textContent = `❌ ${provider} · ${d.latency_ms ?? '—'}ms\n\n${d.error || 'Unknown error'}`;
+    }
+  } catch(e){
+    out.className = 'adm-test-out fail';
+    out.textContent = `Network error: ${e.message}`;
+  }
+}
+
+// ---------- Keys ----------
+async function renderTabKeys(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  let keys = [];
+  try { keys = await fetch('/admin/api_keys').then(r=>r.json()); } catch(_){}
+  adminCache.keys = keys;
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">🔑 Stored API Keys</div>
+      <ul class="adm-list" id="keyListAdmin"></ul>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">＋ Add / Replace Key</div>
       <div class="field" style="margin-bottom:6px">
         <select id="newProvInp" class="inp" style="margin-bottom:6px;cursor:pointer">
-          <option value="groq">groq</option>
-          <option value="openai">openai</option>
-          <option value="claude">claude</option>
-          <option value="gemini">gemini</option>
-          <option value="deepseek">deepseek</option>
+          ${ALL_PROVIDERS.map(p=>`<option value="${p}">${p}</option>`).join('')}
         </select>
         <input id="newKeyInp" class="inp" placeholder="API key value" type="password">
       </div>
-      <button class="btn btn-primary" onclick="addAdminKey()">Add / Replace Key</button>
-    </div>
-
-    <div class="panel-section">
-      <div class="panel-section-title">⚙️ Provider Priority</div>
-      <ul class="key-list" id="priorityAdmin"></ul>
-      <button class="btn btn-primary" onclick="savePriorityAdmin()">Save Order</button>
-    </div>
-
-    <div class="panel-section">
-      <div class="panel-section-title">💾 Backup</div>
-      <p style="font-size:11px;color:var(--chalk-3);font-family:var(--mono);margin-bottom:10px;line-height:1.6">
-        Bundle this project into a ZIP and upload to Supabase Storage (and GitHub if configured).
-      </p>
-      <button class="btn btn-acid" onclick="runBackup()">Run Backup Now</button>
-    </div>
-
-    <div class="panel-section">
-      <button class="btn btn-ghost" onclick="adminLogout()">Log Out of Admin</button>
-    </div>
-  `;
-
-  // Render keys
+      <button class="btn btn-primary" onclick="addAdminKey()">Save Key</button>
+      <p style="font-size:10.5px;color:var(--chalk-4);font-family:var(--mono);margin-top:8px;line-height:1.6">Adding a key for a provider deactivates older keys for the same provider.</p>
+    </div>`;
   const keyList = $('keyListAdmin');
   if (!keys.length){
-    keyList.innerHTML = '<li style="font-size:11px;color:var(--chalk-4);padding:4px 0;font-family:var(--mono)">No keys stored yet.</li>';
+    keyList.innerHTML = '<div class="adm-empty">No keys stored yet.</div>';
+  } else {
+    keys.forEach(k => {
+      const li = document.createElement('li');
+      li.className = 'adm-list-item';
+      const masked = k.api_key_masked || '••••';
+      li.innerHTML = `
+        <span class="adm-pill prov">${esc(k.provider)}</span>
+        <span style="flex:1;color:var(--chalk-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(masked)}</span>
+        <span class="adm-pill ${k.is_active === false ? 'off' : 'on'}">${k.is_active === false ? 'OFF' : 'ON'}</span>
+        <button class="adm-mini" data-prov="${esc(k.provider)}" data-act="test">Test</button>
+        <button class="adm-mini danger" data-prov="${esc(k.provider)}" data-id="${k.id ?? ''}" data-act="del">Delete</button>
+      `;
+      keyList.appendChild(li);
+    });
+    keyList.querySelectorAll('button[data-act="del"]').forEach(b => b.onclick = () => deleteAdminKey(b.dataset.prov, b.dataset.id));
+    keyList.querySelectorAll('button[data-act="test"]').forEach(b => b.onclick = async () => {
+      b.textContent = '…'; b.disabled = true;
+      try {
+        const r = await fetch('/admin/test_provider', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ provider: b.dataset.prov })
+        });
+        const d = await r.json();
+        showToast(d.ok ? `✓ ${d.provider} (${d.latency_ms}ms)` : `✗ ${d.provider}: ${(d.error||'fail').slice(0,60)}`, d.ok?'success':'error');
+      } catch(_){ showToast('Network error', 'error'); }
+      b.textContent = 'Test'; b.disabled = false;
+    });
   }
-  keys.forEach(k => {
-    const li = document.createElement('li');
-    li.className = 'key-item';
-    const masked = k.api_key_masked || (k.api_key ? (k.api_key.slice(0,6)+'…'+k.api_key.slice(-4)) : '••••');
-    li.innerHTML = `
-      <span class="key-prov">${esc(k.provider)}</span>
-      <span class="key-mask">${esc(masked)}</span>
-      <span class="key-status">${k.is_active === false ? 'INACTIVE' : 'ACTIVE'}</span>
-      <button class="key-del" data-prov="${esc(k.provider)}" data-id="${k.id ?? ''}">🗑</button>
-    `;
-    keyList.appendChild(li);
-  });
-  document.querySelectorAll('.key-del').forEach(btn => {
-    btn.onclick = () => deleteAdminKey(btn.dataset.prov, btn.dataset.id);
-  });
+}
 
-  // Drag-drop priority list
+// ---------- Providers (priority + enable/disable) ----------
+async function renderTabProviders(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  let order = ALL_PROVIDERS, settings = {};
+  try {
+    const [o, s] = await Promise.all([
+      fetch('/admin/provider_order').then(r=>r.json()),
+      fetch('/admin/settings').then(r=>r.json()),
+    ]);
+    if (Array.isArray(o)) order = o; else if (o && Array.isArray(o.order)) order = o.order;
+    settings = s || {};
+  } catch(_){}
+  // ensure all known providers appear
+  for (const p of ALL_PROVIDERS) if (!order.includes(p)) order.push(p);
+  providerOrderCache = order;
+  const disabled = new Set(settings.disabled_providers || []);
+
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">⚙️ Fallback Order &amp; Toggles</div>
+      <p style="font-size:11px;color:var(--chalk-4);font-family:var(--mono);margin-bottom:10px;line-height:1.6">Drag the handle to reorder. Use the toggle to skip a provider entirely.</p>
+      <ul class="adm-list" id="priorityAdmin"></ul>
+      <div class="btn-row-tight">
+        <button class="btn btn-primary" onclick="savePriorityAdmin()">Save Order &amp; Toggles</button>
+        <button class="adm-mini" onclick="renderTabProviders()">↻ Reload</button>
+      </div>
+    </div>`;
+
   const priUl = $('priorityAdmin');
   let draggedEl = null;
-  order.forEach(p => {
+  order.forEach((p, idx) => {
     const li = document.createElement('li');
-    li.className = 'key-item drag-item';
+    li.className = 'adm-list-item drag-item';
     li.draggable = true;
     li.dataset.provider = p;
-    li.innerHTML = `<span class="key-prov">${esc(p)}</span><span class="key-mask">drag to reorder</span><span class="drag-handle">⠿</span>`;
+    const isOff = disabled.has(p);
+    li.innerHTML = `
+      <span style="color:var(--chalk-4);font-family:var(--mono);font-size:11px;width:18px">${idx+1}</span>
+      <span class="adm-pill prov">${esc(p)}</span>
+      <span style="flex:1;color:var(--chalk-4);font-size:11px;font-family:var(--mono)">${isOff?'skipped':'in fallback chain'}</span>
+      <label class="toggle-switch" title="Enable / disable">
+        <input type="checkbox" data-tog="${esc(p)}" ${isOff?'':'checked'}>
+        <span class="toggle-slider"></span>
+      </label>
+      <span style="color:var(--chalk-4);cursor:grab;padding:0 4px">⠿</span>
+    `;
     li.addEventListener('dragstart', () => { draggedEl = li; li.classList.add('dragging'); });
     li.addEventListener('dragend',   () => { li.classList.remove('dragging'); draggedEl = null; });
     li.addEventListener('dragover',  e => {
@@ -651,6 +758,283 @@ async function renderAdminContent(){
     });
     priUl.appendChild(li);
   });
+}
+
+async function savePriorityAdmin(){
+  const items = [...document.querySelectorAll('#priorityAdmin .drag-item')];
+  const order = items.map(li => li.dataset.provider);
+  const disabled = items.filter(li => !li.querySelector('input[type=checkbox]').checked).map(li => li.dataset.provider);
+  try {
+    await Promise.all([
+      fetch('/admin/provider_order', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({order})}),
+      fetch('/admin/settings',       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({disabled_providers: disabled})}),
+    ]);
+    providerOrderCache = order;
+    showToast('Provider config saved.', 'success');
+    renderTabProviders();
+  } catch(_){ showToast('Failed to save.', 'error'); }
+}
+
+// ---------- Settings (feature toggles + rate limit) ----------
+async function renderTabSettings(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  let s = {};
+  try { s = await fetch('/admin/settings').then(r=>r.json()); } catch(_){}
+  adminCache.settings = s;
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">🎛 Feature Toggles</div>
+      <div class="adm-row">
+        <div>
+          <div class="adm-row-label">Web search tool</div>
+          <div class="adm-row-sub">Allow GABA to perform DuckDuckGo searches</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="setWebSearch" ${s.feature_web_search?'checked':''}><span class="toggle-slider"></span></label>
+      </div>
+      <div class="adm-row">
+        <div>
+          <div class="adm-row-label">Open user sign-ups</div>
+          <div class="adm-row-sub">When off, /auth/signup returns 403</div>
+        </div>
+        <label class="toggle-switch"><input type="checkbox" id="setSignup" ${s.feature_signup_open?'checked':''}><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">⏱ Rate Limit</div>
+      <div class="adm-row">
+        <div>
+          <div class="adm-row-label">Requests per minute / IP</div>
+          <div class="adm-row-sub">Range 1–600. Excess returns 429.</div>
+        </div>
+        <input type="number" min="1" max="600" id="setRate" class="adm-num" value="${s.rate_limit_per_min ?? 30}">
+      </div>
+    </div>
+    <div class="btn-row-tight">
+      <button class="btn btn-primary" onclick="saveAdminSettings()">Save Settings</button>
+      <button class="adm-mini" onclick="renderTabSettings()">↻ Reload</button>
+    </div>`;
+}
+
+async function saveAdminSettings(){
+  const payload = {
+    feature_web_search:  $('setWebSearch').checked,
+    feature_signup_open: $('setSignup').checked,
+    rate_limit_per_min:  Number($('setRate').value) || 30,
+  };
+  try {
+    const r = await fetch('/admin/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    if (r.ok) showToast('Settings saved.', 'success');
+    else showToast('Save failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+// ---------- System Prompt ----------
+async function renderTabPrompt(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  let d = {};
+  try { d = await fetch('/admin/system_prompt').then(r=>r.json()); } catch(_){}
+  adminCache.prompt = d;
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">📜 Active System Prompt ${d.is_custom?'<span class="adm-pill prov" style="margin-left:6px">CUSTOM</span>':'<span class="adm-pill on" style="margin-left:6px">DEFAULT</span>'}</div>
+      <p style="font-size:11px;color:var(--chalk-4);font-family:var(--mono);margin-bottom:10px;line-height:1.6">This is sent as the system message to every LLM call. Keep your safety rules intact.</p>
+      <textarea id="promptEditor" class="adm-textarea" maxlength="8000">${esc(d.active || '')}</textarea>
+      <div style="font-size:10.5px;color:var(--chalk-4);font-family:var(--mono);margin-top:6px;text-align:right"><span id="promptLen">${(d.active||'').length}</span> / 8000</div>
+      <div class="btn-row-tight">
+        <button class="btn btn-primary" onclick="savePrompt()">Save Custom Prompt</button>
+        <button class="adm-mini danger" onclick="resetPrompt()">Reset to Default</button>
+      </div>
+    </div>`;
+  $('promptEditor').addEventListener('input', e => $('promptLen').textContent = e.target.value.length);
+}
+
+async function savePrompt(){
+  const prompt = $('promptEditor').value.trim();
+  if (!prompt){ showToast('Prompt cannot be empty.', 'error'); return; }
+  try {
+    const r = await fetch('/admin/system_prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({prompt})});
+    const d = await r.json();
+    if (r.ok) { showToast('System prompt saved.', 'success'); renderTabPrompt(); }
+    else showToast(d.error || 'Save failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+async function resetPrompt(){
+  if (!confirm('Reset system prompt to the built-in default?')) return;
+  try {
+    await fetch('/admin/system_prompt/reset', {method:'POST'});
+    showToast('Reset to default.', 'success');
+    renderTabPrompt();
+  } catch(_){ showToast('Failed.', 'error'); }
+}
+
+// ---------- Users ----------
+async function renderTabUsers(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading users…</div>`;
+  let users = [];
+  try { users = await fetch('/admin/users').then(r=>r.json()); } catch(_){}
+  if (!Array.isArray(users)) users = [];
+  adminCache.users = users;
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">👥 Users (${users.length})</div>
+      <input type="text" id="userSearchInp" class="inp adm-search" placeholder="Filter by email…">
+      <ul class="adm-list" id="userListAdmin"></ul>
+      <div class="btn-row-tight">
+        <button class="adm-mini" onclick="renderTabUsers()">↻ Refresh</button>
+        <button class="adm-mini acid" onclick="exportData('users')">⬇ Export JSON</button>
+      </div>
+    </div>`;
+  const listEl = $('userListAdmin');
+  function paint(filter){
+    const f = (filter||'').toLowerCase().trim();
+    const rows = users.filter(u => !f || (u.email||'').toLowerCase().includes(f));
+    if (!rows.length){ listEl.innerHTML = '<div class="adm-empty">No matching users.</div>'; return; }
+    listEl.innerHTML = '';
+    rows.forEach(u => {
+      const li = document.createElement('li');
+      li.className = 'adm-list-item';
+      const date = (u.created_at||'').split('T')[0] || '—';
+      li.innerHTML = `
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--chalk-2)">${esc(u.email||'(no email)')}</span>
+        <span class="adm-pill prov">${u.conv_count ?? 0} chats</span>
+        <span style="color:var(--chalk-4);font-size:10px;font-family:var(--mono)">${esc(date)}</span>
+        <button class="adm-mini danger" data-id="${esc(u.id||'')}" data-email="${esc(u.email||'')}">Delete</button>
+      `;
+      listEl.appendChild(li);
+    });
+    listEl.querySelectorAll('button[data-id]').forEach(b => b.onclick = () => deleteUser(b.dataset.id, b.dataset.email));
+  }
+  $('userSearchInp').addEventListener('input', e => paint(e.target.value));
+  paint('');
+}
+
+async function deleteUser(id, email){
+  if (!id) return showToast('Missing user id.', 'error');
+  if (!confirm(`Delete user ${email}? This removes their account and all their conversations.`)) return;
+  try {
+    const r = await fetch('/admin/users/' + encodeURIComponent(id), {method:'DELETE'});
+    const d = await r.json();
+    if (r.ok){ showToast(`Deleted user (${d.conversations_deleted} chats).`, 'success'); renderTabUsers(); }
+    else showToast(d.error || 'Delete failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+// ---------- Conversations ----------
+async function renderTabConversations(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading…</div>`;
+  await loadConversations('');
+}
+async function loadConversations(q){
+  let rows = [];
+  try {
+    const url = '/admin/conversations?limit=80' + (q ? '&q=' + encodeURIComponent(q) : '');
+    rows = await fetch(url).then(r=>r.json());
+    if (!Array.isArray(rows)) rows = [];
+  } catch(_){}
+  adminCache.conversations = rows;
+  const tb = $('admTabBody');
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">💬 Recent Conversations (${rows.length})</div>
+      <input type="text" id="convSearchInp" class="inp adm-search" placeholder="Search messages or replies…" value="${esc(q||'')}">
+      <div id="convListAdmin"></div>
+      <div class="btn-row-tight">
+        <button class="adm-mini" onclick="loadConversations('')">↻ Reload</button>
+        <button class="adm-mini acid" onclick="exportData('conversations')">⬇ Export JSON</button>
+      </div>
+    </div>`;
+  let timer;
+  $('convSearchInp').addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => loadConversations(e.target.value), 350); });
+  const list = $('convListAdmin');
+  if (!rows.length){ list.innerHTML = '<div class="adm-empty">No conversations.</div>'; return; }
+  rows.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'adm-conv';
+    const t = (r.created_at||'').replace('T',' ').slice(0,16);
+    div.innerHTML = `
+      <div class="adm-conv-meta">
+        <span><span class="adm-pill prov">${esc(r.provider_used||'?')}</span> &middot; ${esc(t)}</span>
+        <button class="adm-mini danger" data-id="${esc(r.id||'')}">Delete</button>
+      </div>
+      <div class="adm-conv-msg"><strong style="color:var(--chalk-2)">U:</strong> ${esc((r.user_message||'').slice(0,300))}</div>
+      <div class="adm-conv-reply"><strong style="color:var(--chalk-2)">G:</strong> ${esc((r.bot_reply||'').slice(0,300))}</div>
+    `;
+    list.appendChild(div);
+  });
+  list.querySelectorAll('button[data-id]').forEach(b => b.onclick = () => deleteConversation(b.dataset.id));
+}
+async function deleteConversation(id){
+  if (!id || !confirm('Delete this conversation log?')) return;
+  try {
+    const r = await fetch('/admin/conversations/' + encodeURIComponent(id), {method:'DELETE'});
+    if (r.ok){ showToast('Deleted.', 'success'); loadConversations($('convSearchInp')?.value || ''); }
+    else showToast('Delete failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+// ---------- Backup ----------
+function renderTabBackup(){
+  $('admTabBody').innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">💾 Project Backup</div>
+      <p style="font-size:11.5px;color:var(--chalk-3);font-family:var(--mono);margin-bottom:12px;line-height:1.7">Bundle the full project (code + DB snapshots) into a ZIP and upload it to Supabase Storage and (if configured) push to GitHub.</p>
+      <button class="btn btn-acid" onclick="runBackup()">Run Backup Now</button>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">📤 Data Exports</div>
+      <p style="font-size:11px;color:var(--chalk-4);font-family:var(--mono);margin-bottom:10px;line-height:1.6">Download as JSON for offline analysis.</p>
+      <div class="btn-row-tight">
+        <button class="adm-mini acid" onclick="exportData('users')">⬇ Users</button>
+        <button class="adm-mini acid" onclick="exportData('conversations')">⬇ Conversations</button>
+        <button class="adm-mini acid" onclick="exportData('settings')">⬇ Settings</button>
+      </div>
+    </div>`;
+}
+
+async function exportData(kind){
+  showToast(`Exporting ${kind}…`);
+  try {
+    const r = await fetch('/admin/export/' + encodeURIComponent(kind));
+    const data = await r.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `gaba_${kind}_${Date.now()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${kind}.`, 'success');
+  } catch(_){ showToast('Export failed.', 'error'); }
+}
+
+// ---------- Password ----------
+function renderTabPassword(){
+  $('admTabBody').innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">🔐 Change Admin Password</div>
+      <p style="font-size:11px;color:var(--chalk-4);font-family:var(--mono);margin-bottom:10px;line-height:1.6">A custom hashed password is stored in the database and overrides the env var until cleared.</p>
+      <div class="field"><label>Current password</label><input type="password" id="pwdCurrent" class="inp" autocomplete="current-password"></div>
+      <div class="field"><label>New password (8+ characters)</label><input type="password" id="pwdNew" class="inp" autocomplete="new-password"></div>
+      <div class="field"><label>Confirm new password</label><input type="password" id="pwdConfirm" class="inp" autocomplete="new-password"></div>
+      <button class="btn btn-primary" onclick="changeAdminPassword()">Update Password</button>
+    </div>`;
+}
+
+async function changeAdminPassword(){
+  const cur = $('pwdCurrent').value;
+  const nw  = $('pwdNew').value;
+  const cf  = $('pwdConfirm').value;
+  if (!cur || !nw){ showToast('Fill in current and new password.', 'error'); return; }
+  if (nw.length < 8){ showToast('New password must be 8+ characters.', 'error'); return; }
+  if (nw !== cf){ showToast('New password and confirmation do not match.', 'error'); return; }
+  try {
+    const r = await fetch('/admin/change_password', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({current: cur, new: nw})});
+    const d = await r.json();
+    if (r.ok){ showToast('Password updated.', 'success'); $('pwdCurrent').value = $('pwdNew').value = $('pwdConfirm').value = ''; }
+    else showToast(d.error || 'Update failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
 }
 
 async function attemptAdminLogin(){
@@ -764,3 +1148,21 @@ window.deleteAdminKey = deleteAdminKey;
 window.savePriorityAdmin = savePriorityAdmin;
 window.runBackup = runBackup;
 window.adminLogout = adminLogout;
+window.setAdminTab = setAdminTab;
+window.renderTabDashboard = renderTabDashboard;
+window.renderTabKeys = renderTabKeys;
+window.renderTabProviders = renderTabProviders;
+window.renderTabSettings = renderTabSettings;
+window.renderTabPrompt = renderTabPrompt;
+window.renderTabUsers = renderTabUsers;
+window.renderTabConversations = renderTabConversations;
+window.loadConversations = loadConversations;
+window.deleteConversation = deleteConversation;
+window.deleteUser = deleteUser;
+window.savePrompt = savePrompt;
+window.resetPrompt = resetPrompt;
+window.saveAdminSettings = saveAdminSettings;
+window.exportData = exportData;
+window.changeAdminPassword = changeAdminPassword;
+window.clearRateLimit = clearRateLimit;
+window.quickTestProvider = quickTestProvider;

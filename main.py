@@ -218,6 +218,7 @@ def login():
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         session["user_id"] = res.user.id
+        session["user_email"] = res.user.email
         session["access_token"] = res.session.access_token
         return jsonify({"status": "ok", "email": res.user.email})
     except Exception as e:
@@ -226,13 +227,18 @@ def login():
 @app.route("/auth/logout", methods=["POST"])
 def logout():
     session.pop("user_id", None)
+    session.pop("user_email", None)
     session.pop("access_token", None)
     return jsonify({"status": "ok"})
 
 @app.route("/auth/me", methods=["GET"])
 def me():
     if session.get("user_id"):
-        return jsonify({"logged_in": True, "user_id": session["user_id"]})
+        return jsonify({
+            "logged_in": True,
+            "user_id": session["user_id"],
+            "email": session.get("user_email", "")
+        })
     return jsonify({"logged_in": False})
 
 # ========== CHAT ROUTE ==========

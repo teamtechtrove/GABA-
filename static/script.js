@@ -1,557 +1,766 @@
-// ========== GABA v3.0 Frontend ==========
-let conversationHistory = [];
-let currentSessionId = localStorage.getItem('sessionId') || Math.random().toString(36).substring(2);
-localStorage.setItem('sessionId', currentSessionId);
-let userLoggedIn = false;
-let userEmail = '';
-let stickToBottom = true;
+'use strict';
+/* ============================================================
+   GABA v3.0 — frontend wired to Flask backend
+   ============================================================ */
 
-// DOM elements
-const chatArea = document.getElementById('chatArea');
-const messagesDiv = document.getElementById('messages');
-const welcomeScreen = document.getElementById('welcomeScreen');
-const userInput = document.getElementById('userInput');
-const sendBtn = document.getElementById('sendBtn');
-const typingIndicator = document.getElementById('typingIndicator');
-const modelPill = document.getElementById('modelPill');
-const modelLabel = document.getElementById('modelLabel');
-const historyListDiv = document.getElementById('historyList');
-const charCountSpan = document.getElementById('charCount');
-const authModal = document.getElementById('authModal');
-const authStatus = document.getElementById('authStatus');
-const authFormDiv = document.getElementById('authForm');
-const authLoggedInDiv = document.getElementById('authLoggedIn');
-const userEmailSpan = document.getElementById('userEmail');
-const sidebarEl = document.getElementById('sidebar');
-const sidebarBackdrop = document.getElementById('sidebarBackdrop');
-const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+// ===== state =====
+const CFG_KEY = 'gaba_cfg_v3';
+const SID_KEY = 'gaba_sid_v3';
+const CONV_PREFIX = 'gaba_conv_v3_';
 
-function setChatState(hasMessages) {
-    document.body.classList.toggle('state-chat', hasMessages);
-    document.body.classList.toggle('state-welcome', !hasMessages);
-}
-
-// Restore previous conversation
-const saved = localStorage.getItem(`gaba_conv_${currentSessionId}`);
-if (saved) {
-    try {
-        conversationHistory = JSON.parse(saved);
-        if (conversationHistory.length) {
-            setChatState(true);
-            renderMessages();
-        }
-    } catch (e) {}
-}
-
-// ===== Input behavior =====
-userInput.addEventListener('input', () => {
-    charCountSpan.innerText = userInput.value.length;
-    if (userInput.value.length > 4000) userInput.value = userInput.value.slice(0, 4000);
-    userInput.style.height = 'auto';
-    userInput.style.height = Math.min(userInput.scrollHeight, 140) + 'px';
-});
-
-userInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-});
-
-// Track scroll position to decide auto-scroll & toggle the jump button
-chatArea.addEventListener('scroll', () => {
-    const distance = chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight;
-    stickToBottom = distance < 80;
-    scrollBottomBtn.classList.toggle('visible', distance > 200);
-});
-
-// ===== Send / receive =====
-async function sendMessage() {
-    const msg = userInput.value.trim();
-    if (!msg) return;
-    sendBtn.disabled = true;
-    addMessageToUI(msg, 'user');
-    conversationHistory.push({ role: 'user', content: msg });
-    userInput.value = '';
-    userInput.style.height = 'auto';
-    charCountSpan.innerText = '0';
-    setChatState(true);
-    typingIndicator.classList.add('active');
-    if (modelPill) modelPill.classList.add('thinking');
-    stickToBottom = true;
-    scrollChat(true);
-    try {
-        const res = await fetch('/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: msg, history: conversationHistory.slice(0, -1) })
-        });
-        if (res.status === 429) {
-            showToast('Slow down — too many messages', true);
-            return;
-        }
-        const data = await res.json();
-        if (data.error) {
-            addMessageToUI(`⚠️ ${data.error}`, 'bot');
-        } else {
-            addMessageToUI(data.reply, 'bot', data.provider, true);
-            conversationHistory.push({ role: 'assistant', content: data.reply });
-            if (conversationHistory.length > 30) conversationHistory = conversationHistory.slice(-30);
-            localStorage.setItem(`gaba_conv_${currentSessionId}`, JSON.stringify(conversationHistory));
-            if (data.provider) modelLabel.innerText = data.provider.toUpperCase();
-            renderHistory();
-        }
-    } catch (err) {
-        addMessageToUI('Network error — please try again.', 'bot');
-    } finally {
-        typingIndicator.classList.remove('active');
-        if (modelPill) modelPill.classList.remove('thinking');
-        sendBtn.disabled = false;
-        userInput.focus();
-    }
-}
-
-// ===== Render =====
-const BOT_AVATAR_SVG = '<svg width="14" height="14" viewBox="0 0 32 32"><defs><linearGradient id="ba" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#64f0ff"/><stop offset=".55" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/></linearGradient></defs><path fill="url(#ba)" d="M18 2 L6 18 h8 l-2 12 12-16 h-8 z"/></svg>';
-
-function addMessageToUI(text, sender, provider = null, animateTyping = false) {
-    const msgRow = document.createElement('div');
-    msgRow.className = `msg-row ${sender}`;
-
-    const avatar = document.createElement('div');
-    avatar.className = 'msg-avatar';
-    avatar.innerHTML = sender === 'user' ? (userEmail ? userEmail[0].toUpperCase() : 'U') : BOT_AVATAR_SVG;
-
-    const bodyDiv = document.createElement('div');
-    bodyDiv.className = 'msg-body';
-
-    const meta = document.createElement('div');
-    meta.className = 'msg-meta';
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.innerHTML = `<span>${sender === 'user' ? 'You' : 'GABA'} · ${time}</span>`;
-    if (provider && sender === 'bot') meta.innerHTML += `<span class="provider-badge">${provider}</span>`;
-
-    const bubble = document.createElement('div');
-    bubble.className = 'msg-bubble';
-
-    bodyDiv.appendChild(meta);
-    bodyDiv.appendChild(bubble);
-    msgRow.appendChild(avatar);
-    msgRow.appendChild(bodyDiv);
-    messagesDiv.appendChild(msgRow);
-
-    if (animateTyping && sender === 'bot') {
-        typewriter(bubble, text);
-    } else {
-        bubble.innerHTML = formatMessage(text);
-        wireCodeCopyButtons(bubble);
-    }
-    if (stickToBottom) scrollChat();
-}
-
-// Typewriter for bot replies — char-batched so it feels smooth, not laggy
-function typewriter(el, text) {
-    const total = text.length;
-    // Adapt speed to length so long messages don't take forever
-    const batch = Math.max(2, Math.floor(total / 200));
-    let i = 0;
-    function tick() {
-        i = Math.min(total, i + batch);
-        el.innerHTML = formatMessage(text.slice(0, i)) + (i < total ? '<span class="caret">▍</span>' : '');
-        if (stickToBottom) scrollChat();
-        if (i < total) {
-            requestAnimationFrame(tick);
-        } else {
-            el.innerHTML = formatMessage(text);
-            wireCodeCopyButtons(el);
-        }
-    }
-    tick();
-}
-
-function wireCodeCopyButtons(scope) {
-    scope.querySelectorAll('.code-block-wrapper').forEach(wrap => {
-        const btn = wrap.querySelector('.code-copy-btn');
-        if (!btn || btn.dataset.wired) return;
-        btn.dataset.wired = '1';
-        btn.onclick = () => {
-            const code = wrap.querySelector('code').innerText;
-            navigator.clipboard.writeText(code).then(() => {
-                btn.classList.add('copied');
-                btn.innerText = 'Copied';
-                setTimeout(() => { btn.classList.remove('copied'); btn.innerText = 'Copy'; }, 1500);
-            });
-        };
-    });
-}
-
-// ===== Lightweight Markdown =====
-function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-}
-
-function formatMessage(t) {
-    if (!t) return '';
-    // Pull out code blocks first so their contents aren't re-formatted
-    const blocks = [];
-    t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
-        const idx = blocks.length;
-        blocks.push(`<div class="code-block-wrapper"><button class="code-copy-btn">Copy</button><pre><code class="language-${lang || 'text'}">${escapeHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
-        return `\u0000BLOCK${idx}\u0000`;
-    });
-
-    t = escapeHtml(t);
-
-    // Inline code
-    t = t.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-
-    // Headings
-    t = t.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-    t = t.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
-    t = t.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
-
-    // Bold + italic
-    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-
-    // Links
-    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    t = t.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-
-    // Lists — group consecutive lines starting with - or 1. into ul/ol
-    const lines = t.split('\n');
-    const out = [];
-    let listType = null;
-    for (const line of lines) {
-        const ulMatch = line.match(/^\s*[-*]\s+(.+)$/);
-        const olMatch = line.match(/^\s*\d+\.\s+(.+)$/);
-        if (ulMatch) {
-            if (listType !== 'ul') { if (listType) out.push(`</${listType}>`); out.push('<ul>'); listType = 'ul'; }
-            out.push(`<li>${ulMatch[1]}</li>`);
-        } else if (olMatch) {
-            if (listType !== 'ol') { if (listType) out.push(`</${listType}>`); out.push('<ol>'); listType = 'ol'; }
-            out.push(`<li>${olMatch[1]}</li>`);
-        } else {
-            if (listType) { out.push(`</${listType}>`); listType = null; }
-            out.push(line);
-        }
-    }
-    if (listType) out.push(`</${listType}>`);
-    t = out.join('\n');
-
-    // Paragraphs / line breaks (don't break inside block elements)
-    t = t.replace(/\n{2,}/g, '</p><p>');
-    t = t.replace(/(?<!>)\n(?!<)/g, '<br>');
-    t = `<p>${t}</p>`;
-    t = t.replace(/<p>(\s*<(h[1-3]|ul|ol|div)[^>]*>)/g, '$1');
-    t = t.replace(/(<\/(h[1-3]|ul|ol|div)>\s*)<\/p>/g, '$1');
-
-    // Restore code blocks
-    t = t.replace(/\u0000BLOCK(\d+)\u0000/g, (m, i) => blocks[parseInt(i)]);
-    return t;
-}
-
-function scrollChat(force = false) {
-    if (force || stickToBottom) {
-        chatArea.scrollTop = chatArea.scrollHeight;
-    }
-}
-
-function clearChat() {
-    conversationHistory = [];
-    messagesDiv.innerHTML = '';
-    setChatState(false);
-    localStorage.removeItem(`gaba_conv_${currentSessionId}`);
-    renderHistory();
-    showToast('Chat cleared');
-}
-
-function newChat() {
-    if (conversationHistory.length) {
-        currentSessionId = Math.random().toString(36).substring(2);
-        localStorage.setItem('sessionId', currentSessionId);
-    }
-    conversationHistory = [];
-    messagesDiv.innerHTML = '';
-    setChatState(false);
-    renderHistory();
-    closeSidebar();
-    userInput.focus();
-}
-
-function renderHistory() {
-    const items = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (!k || !k.startsWith('gaba_conv_')) continue;
-        try {
-            const conv = JSON.parse(localStorage.getItem(k));
-            if (!conv.length) continue;
-            const firstUser = conv.find(c => c.role === 'user');
-            const title = firstUser ? firstUser.content.slice(0, 38) : 'Empty chat';
-            items.push({ key: k, title, id: k.replace('gaba_conv_', '') });
-        } catch (e) {}
-    }
-    historyListDiv.innerHTML = items.length
-        ? ''
-        : '<div class="history-item" style="cursor:default;opacity:0.6;">No recent chats</div>';
-    items.slice(-8).reverse().forEach(it => {
-        const div = document.createElement('div');
-        div.className = 'history-item' + (it.id === currentSessionId ? ' active' : '');
-        div.innerText = it.title + (it.title.length >= 38 ? '…' : '');
-        div.onclick = () => loadChat(it.key);
-        historyListDiv.appendChild(div);
-    });
-}
-
-function loadChat(key) {
-    const data = localStorage.getItem(key);
-    if (!data) return;
-    conversationHistory = JSON.parse(data);
-    messagesDiv.innerHTML = '';
-    setChatState(conversationHistory.length > 0);
-    renderMessages();
-    currentSessionId = key.replace('gaba_conv_', '');
-    localStorage.setItem('sessionId', currentSessionId);
-    renderHistory();
-    closeSidebar();
-}
-
-function renderMessages() {
-    for (const turn of conversationHistory) {
-        if (turn.role === 'user') addMessageToUI(turn.content, 'user');
-        else if (turn.role === 'assistant') addMessageToUI(turn.content, 'bot');
-    }
-}
-
-// ===== Voice =====
-let recognition = null;
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (SR) {
-    recognition = new SR();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-    recognition.onresult = (e) => {
-        userInput.value = e.results[0][0].transcript;
-        userInput.dispatchEvent(new Event('input'));
-        sendMessage();
-    };
-    recognition.onerror = () => showToast('Voice not recognized', true);
-}
-function startVoiceInput() {
-    if (recognition) {
-        showToast('Listening…');
-        try { recognition.start(); } catch (e) {}
-    } else {
-        showToast('Voice not supported here', true);
-    }
-}
-
-// ===== Auth modal =====
-function toggleAuthModal() {
-    const isOpen = authModal.classList.contains('open');
-    if (isOpen) closeAuthModal();
-    else { authModal.classList.add('open'); checkAuthStatus(); }
-}
-function closeAuthModal() { authModal.classList.remove('open'); }
-
-async function checkAuthStatus() {
-    try {
-        const res = await fetch('/auth/me');
-        const data = await res.json();
-        if (data.logged_in) {
-            userLoggedIn = true;
-            userEmail = data.email || 'user';
-            authStatus.innerText = `Signed in as ${userEmail}`;
-            authFormDiv.style.display = 'none';
-            authLoggedInDiv.style.display = 'block';
-            userEmailSpan.innerText = userEmail;
-        } else {
-            userLoggedIn = false;
-            authStatus.innerText = 'Not signed in';
-            authFormDiv.style.display = 'block';
-            authLoggedInDiv.style.display = 'none';
-        }
-    } catch (e) {
-        authStatus.innerText = 'Connection issue';
-    }
-}
-
-document.getElementById('authLoginBtn').onclick = async () => {
-    const email = document.getElementById('authEmail').value.trim();
-    const pwd = document.getElementById('authPassword').value;
-    if (!email || !pwd) return showToast('Email and password required', true);
-    const res = await fetch('/auth/login', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: pwd })
-    });
-    if (res.ok) { showToast('Signed in'); closeAuthModal(); checkAuthStatus(); }
-    else showToast('Sign-in failed', true);
-};
-document.getElementById('authSignupBtn').onclick = async () => {
-    const email = document.getElementById('authEmail').value.trim();
-    const pwd = document.getElementById('authPassword').value;
-    if (!email || !pwd) return showToast('Email and password required', true);
-    const res = await fetch('/auth/signup', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: pwd })
-    });
-    if (res.ok) showToast('Account created — sign in now');
-    else showToast('Sign-up failed', true);
-};
-document.getElementById('authLogoutBtn').onclick = async () => {
-    await fetch('/auth/logout', { method: 'POST' });
-    showToast('Signed out');
-    checkAuthStatus();
-};
-
-// ===== Admin panel =====
+let cfg = { stream: true, autoSave: true, compact: false };
+let conversation = [];
+let currentSid = localStorage.getItem(SID_KEY) || newSid();
+let isTyping = false;
+let auth = { loggedIn: false, email: '' };
 let adminLoggedIn = false;
-async function checkAdmin() {
-    const r = await fetch('/admin/check');
-    const d = await r.json();
-    adminLoggedIn = d.logged_in;
-}
-async function toggleAdminPanel() {
-    const panel = document.getElementById('adminPanel');
-    if (panel.classList.contains('open')) panel.classList.remove('open');
-    else { panel.classList.add('open'); await checkAdmin(); await loadAdminContent(); }
-}
-async function loadAdminContent() {
-    const content = document.getElementById('adminContent');
-    if (!adminLoggedIn) {
-        content.innerHTML = `<input id="adminPwd" class="admin-input" placeholder="Admin password" type="password"><button class="admin-btn admin-btn-primary" id="adminLoginBtn">Login</button><div id="adminErr" class="admin-error"></div>`;
-        document.getElementById('adminLoginBtn').onclick = async () => {
-            const pwd = document.getElementById('adminPwd').value;
-            const r = await fetch('/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
-            if (r.ok) { adminLoggedIn = true; loadAdminContent(); showToast('Admin signed in'); }
-            else document.getElementById('adminErr').innerText = 'Wrong password';
-        };
-        return;
-    }
-    const [keysRes, statsRes, orderRes] = await Promise.all([
-        fetch('/admin/api_keys'), fetch('/admin/stats'), fetch('/admin/provider_order')
-    ]);
-    const keys = await keysRes.json();
-    const stats = await statsRes.json();
-    let providerOrder = await orderRes.json();
-    content.innerHTML = `
-        <div class="admin-section"><h4>Stats</h4><div class="stat-row"><span>Conversations</span><span class="stat-val">${stats.total_conversations}</span></div><div class="stat-row"><span>Active keys</span><span class="stat-val">${stats.active_api_keys}</span></div><div class="stat-row"><span>Users</span><span class="stat-val">${stats.total_users}</span></div></div>
-        <div class="admin-section"><h4>API Keys</h4><ul id="keyListAdmin" class="key-list"></ul><input id="newProvider" class="admin-input" placeholder="Provider (groq, openai, ...)"><input id="newKey" class="admin-input" placeholder="API key"><button class="admin-btn admin-btn-primary" id="addKeyBtn">Add Key</button></div>
-        <div class="admin-section"><h4>Provider Priority</h4><ul id="priorityList" class="key-list"></ul><button class="admin-btn admin-btn-primary" id="savePriorityBtn">Save Order</button></div>
-        <div class="admin-section"><h4>Backup</h4><button class="admin-btn admin-btn-primary" id="backupBtn">Backup Now</button></div>
-        <div class="admin-section"><button class="admin-btn admin-btn-ghost" id="adminLogoutBtn">Logout</button></div>
-    `;
-    const keyList = document.getElementById('keyListAdmin');
-    keys.forEach(k => {
-        const li = document.createElement('li');
-        li.className = 'key-item';
-        li.innerHTML = `<span class="key-active-dot ${k.is_active ? '' : 'key-inactive-dot'}"></span><div class="key-item-info"><div class="key-provider">${k.provider}</div><div class="key-masked">${k.api_key_masked}</div></div><button class="key-delete" data-id="${k.id}">✕</button>`;
-        keyList.appendChild(li);
-    });
-    document.querySelectorAll('.key-delete').forEach(btn => btn.onclick = async () => {
-        await fetch('/admin/api_keys', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.getAttribute('data-id') }) });
-        loadAdminContent();
-    });
-    document.getElementById('addKeyBtn').onclick = async () => {
-        const provider = document.getElementById('newProvider').value.trim().toLowerCase();
-        const key = document.getElementById('newKey').value.trim();
-        if (!provider || !key) return showToast('Provider and key required', true);
-        await fetch('/admin/api_keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, api_key: key }) });
-        loadAdminContent();
-    };
-    const priorityUl = document.getElementById('priorityList');
-    providerOrder.forEach((p, idx) => {
-        const li = document.createElement('li');
-        li.className = 'key-item';
-        li.setAttribute('data-provider', p);
-        li.innerHTML = `<span class="key-provider">${p}</span><span style="margin-left:auto;color:var(--text-muted);">☰</span>`;
-        li.draggable = true;
-        li.ondragstart = (e) => e.dataTransfer.setData('text/plain', idx);
-        li.ondragover = (e) => e.preventDefault();
-        li.ondrop = (e) => {
-            e.preventDefault();
-            const from = parseInt(e.dataTransfer.getData('text/plain'));
-            const to = idx;
-            if (from !== to) {
-                const moved = providerOrder.splice(from, 1)[0];
-                providerOrder.splice(to, 0, moved);
-                loadAdminContent();
-            }
-        };
-        priorityUl.appendChild(li);
-    });
-    document.getElementById('savePriorityBtn').onclick = async () => {
-        const items = document.querySelectorAll('#priorityList .key-item');
-        const newOrder = Array.from(items).map(li => li.getAttribute('data-provider'));
-        await fetch('/admin/provider_order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order: newOrder }) });
-        showToast('Provider order saved');
-    };
-    document.getElementById('backupBtn').onclick = async () => {
-        const r = await fetch('/admin/backup', { method: 'POST' });
-        const d = await r.json();
-        showToast(d.output ? 'Backup done' : 'Backup error', !d.output);
-    };
-    document.getElementById('adminLogoutBtn').onclick = async () => {
-        await fetch('/admin/logout', { method: 'POST' });
-        adminLoggedIn = false;
-        loadAdminContent();
-        showToast('Admin signed out');
-    };
-}
+let providerOrderCache = ['groq','openai','claude','gemini','deepseek'];
 
-// Hidden admin trigger: double-click bottom-left corner
-document.body.addEventListener('dblclick', (e) => {
-    if (e.clientX < 250 && window.innerHeight - e.clientY < 250) toggleAdminPanel();
+// ===== bootstrap =====
+const $ = id => document.getElementById(id);
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadCfg();
+  applyBodyClasses();
+  initCanvas();
+  restoreSession();
+  renderHistory();
+  localStorage.setItem(SID_KEY, currentSid);
+  fetchAuthMe();
+  bindInput();
+  bindAdminHotspot();
+  bindModalDismiss();
+  initVoice();
 });
-document.getElementById('adminClose').onclick = () => document.getElementById('adminPanel').classList.remove('open');
 
-// ===== Helpers =====
-function showToast(msg, isErr = false) {
-    const t = document.createElement('div');
-    t.className = `toast ${isErr ? 'error' : ''}`;
-    t.innerText = msg;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 2800);
+function loadCfg(){
+  try { cfg = { ...cfg, ...JSON.parse(localStorage.getItem(CFG_KEY) || '{}') }; } catch(_){}
+}
+function saveCfg(){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+function applyBodyClasses(){
+  document.body.classList.toggle('compact', !!cfg.compact);
+}
+function newSid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+// ===== background canvas (subtle drifting particles) =====
+function initCanvas(){
+  const c = $('bgCanvas'); if (!c) return;
+  const ctx = c.getContext('2d');
+  let w, h, particles = [];
+  function resize(){
+    w = c.width = window.innerWidth;
+    h = c.height = window.innerHeight;
+    const count = Math.min(70, Math.floor((w*h)/22000));
+    particles = Array.from({length: count}, () => ({
+      x: Math.random()*w, y: Math.random()*h,
+      vx: (Math.random()-.5)*.18, vy: (Math.random()-.5)*.18,
+      r: Math.random()*1.6 + .4,
+      hue: Math.random() < .5 ? 260 : (Math.random()<.5 ? 290 : 150),
+    }));
+  }
+  function tick(){
+    ctx.clearRect(0,0,w,h);
+    for (const p of particles){
+      p.x += p.vx; p.y += p.vy;
+      if (p.x<0) p.x=w; if (p.x>w) p.x=0;
+      if (p.y<0) p.y=h; if (p.y>h) p.y=0;
+      ctx.beginPath();
+      ctx.fillStyle = `hsla(${p.hue}, 90%, 65%, .55)`;
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // soft connecting lines
+    for (let i=0;i<particles.length;i++){
+      for (let j=i+1;j<particles.length;j++){
+        const a = particles[i], b = particles[j];
+        const dx = a.x-b.x, dy = a.y-b.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < 14000){
+          ctx.strokeStyle = `rgba(108,71,255,${.10 * (1 - d2/14000)})`;
+          ctx.lineWidth = .6;
+          ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  window.addEventListener('resize', resize);
+  resize(); tick();
 }
 
-function toggleSidebar() {
-    sidebarEl.classList.toggle('open');
-    sidebarBackdrop.classList.toggle('active', sidebarEl.classList.contains('open'));
-}
-function closeSidebar() {
-    sidebarEl.classList.remove('open');
-    sidebarBackdrop.classList.remove('active');
+// ===== textarea =====
+function bindInput(){
+  const ta = $('userInput'), cc = $('charCount');
+  ta.addEventListener('input', () => {
+    cc.textContent = ta.value.length;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+  });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+  });
 }
 
-function useSuggestion(txt) {
-    userInput.value = txt;
-    userInput.dispatchEvent(new Event('input'));
+// ===== toast =====
+function showToast(msg, type=''){
+  const t = document.createElement('div');
+  t.className = 'toast' + (type ? ' '+type : '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .25s'; }, 2400);
+  setTimeout(() => t.remove(), 2700);
+}
+
+// ===== send =====
+async function sendMessage(){
+  const ta = $('userInput');
+  const msg = ta.value.trim();
+  if (!msg || isTyping) return;
+
+  isTyping = true;
+  $('sendBtn').disabled = true;
+  ta.value = ''; ta.style.height = 'auto';
+  $('charCount').textContent = '0';
+
+  appendMsg(msg, 'user');
+  $('welcomeScreen').style.display = 'none';
+  conversation.push({ role:'user', content: msg });
+
+  $('typingBar').classList.add('on');
+  document.querySelector('.live-dot')?.classList.add('thinking');
+  $('modelLabel').textContent = 'THINKING';
+  scrollChat();
+
+  try {
+    const res = await fetch('/chat', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, history: conversation.slice(-30) }),
+    });
+    const data = await res.json();
+    const reply = data.reply || 'No response.';
+    const provider = data.provider || 'gaba';
+    appendMsg(reply, 'bot', provider);
+    conversation.push({ role:'assistant', content: reply });
+    if (cfg.autoSave) localStorage.setItem(CONV_PREFIX + currentSid, JSON.stringify(conversation));
+    renderHistory();
+    $('modelLabel').textContent = provider.toUpperCase();
+  } catch (e){
+    appendMsg('Network error — please try again.', 'bot', 'err');
+    $('modelLabel').textContent = 'ERROR';
+  } finally {
+    $('typingBar').classList.remove('on');
+    document.querySelector('.live-dot')?.classList.remove('thinking');
+    isTyping = false;
+    $('sendBtn').disabled = false;
+    ta.focus();
+  }
+}
+
+// ===== render =====
+function appendMsg(text, role, provider=null){
+  const msgs = $('messages');
+  const row = document.createElement('div');
+  row.className = `msg-row ${role}`;
+
+  const av = document.createElement('div');
+  av.className = 'msg-av';
+  av.textContent = role === 'user' ? (auth.email ? auth.email[0].toUpperCase() : 'Y') : '⚡';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  const who = role === 'user' ? 'You' : 'GABA';
+  const time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  meta.innerHTML = `<span>${who} · ${time}</span>`;
+  if (provider && role === 'bot'){
+    let cls = '';
+    if (provider === 'safety') cls = 'safe';
+    else if (provider === 'err' || provider === 'error') cls = 'err';
+    meta.innerHTML += `<span class="prov-badge ${cls}">${esc(provider)}</span>`;
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = formatMsg(text);
+  addCopyButtons(bubble);
+
+  body.appendChild(meta);
+  body.appendChild(bubble);
+  row.appendChild(av);
+  row.appendChild(body);
+  msgs.appendChild(row);
+  scrollChat();
+}
+
+function renderAll(){
+  $('messages').innerHTML = '';
+  for (const t of conversation){
+    if (t.role === 'user') appendMsg(t.content, 'user');
+    else if (t.role === 'assistant') appendMsg(t.content, 'bot');
+  }
+}
+
+function addCopyButtons(bubble){
+  bubble.querySelectorAll('pre').forEach(pre => {
+    if (pre.parentNode.classList?.contains('code-wrapper')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-wrapper';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'Copy';
+    btn.onclick = () => {
+      const code = pre.querySelector('code')?.textContent || pre.textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1800);
+      });
+    };
+    wrap.appendChild(btn);
+  });
+}
+
+// ===== markdown formatter =====
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function formatMsg(t){
+  if (!t) return '';
+  // Code blocks first (preserve raw content)
+  const codeBlocks = [];
+  t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = codeBlocks.push(`<pre><code class="lang-${lang || 'text'}">${esc(code.replace(/\n$/,''))}</code></pre>`) - 1;
+    return `\u0000CB${i}\u0000`;
+  });
+  // Inline code
+  const inlines = [];
+  t = t.replace(/`([^`\n]+)`/g, (_, c) => {
+    const i = inlines.push(`<code>${esc(c)}</code>`) - 1;
+    return `\u0000IC${i}\u0000`;
+  });
+  // Escape rest
+  t = esc(t);
+  // Headers
+  t = t.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+  t = t.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+  // Bold / italic
+  t = t.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Blockquote
+  t = t.replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+  // Lists
+  t = t.replace(/^[*-]\s+(.+)$/gm, '<li>$1</li>');
+  t = t.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  t = t.replace(/(<li>[\s\S]*?<\/li>(?:\n<li>[\s\S]*?<\/li>)*)/g, '<ul>$1</ul>');
+  // URLs
+  t = t.replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // Newlines
+  t = t.replace(/\n/g, '<br>');
+  t = t.replace(/<br>(<(?:pre|ul|ol|table|blockquote|h[1-6]))/g, '$1');
+  t = t.replace(/(<\/(?:pre|ul|ol|table|blockquote|h[1-6])>)<br>/g, '$1');
+  // Restore inline code, then code blocks
+  t = t.replace(/\u0000IC(\d+)\u0000/g, (_, i) => inlines[+i]);
+  t = t.replace(/\u0000CB(\d+)\u0000/g, (_, i) => codeBlocks[+i]);
+  return t;
+}
+
+function scrollChat(){
+  const ca = $('chatArea');
+  ca.scrollTo({ top: ca.scrollHeight, behavior:'smooth' });
+}
+
+// ===== chat ops =====
+function newChat(){
+  conversation = [];
+  currentSid = newSid();
+  localStorage.setItem(SID_KEY, currentSid);
+  $('messages').innerHTML = '';
+  $('welcomeScreen').style.display = 'flex';
+  $('modelLabel').textContent = 'READY';
+  $('userInput').value = ''; $('userInput').style.height = 'auto'; $('charCount').textContent = '0';
+  renderHistory();
+  showToast('New conversation started');
+  $('userInput').focus();
+  if (window.innerWidth <= 768) closeSidebar();
+}
+
+function clearChat(){
+  if (!conversation.length) { showToast('Nothing to clear.'); return; }
+  if (!confirm('Clear this conversation?')) return;
+  conversation = [];
+  localStorage.removeItem(CONV_PREFIX + currentSid);
+  $('messages').innerHTML = '';
+  $('welcomeScreen').style.display = 'flex';
+  $('modelLabel').textContent = 'READY';
+  renderHistory();
+  showToast('Chat cleared');
+}
+
+function exportChat(){
+  if (!conversation.length){ showToast('Nothing to export.', 'error'); return; }
+  const lines = conversation.map(t => `[${t.role.toUpperCase()}]\n${t.content}\n`).join('\n---\n\n');
+  const blob = new Blob([`GABA Chat Export\n${'='.repeat(40)}\n\n${lines}`], { type:'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `gaba_chat_${Date.now()}.txt`; a.click();
+  URL.revokeObjectURL(url);
+  showToast('Chat exported!', 'success');
+}
+
+function useSuggestion(text){
+  const ta = $('userInput');
+  ta.value = text; $('charCount').textContent = text.length;
+  ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+  ta.focus(); sendMessage();
+}
+
+function restoreSession(){
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONV_PREFIX + currentSid) || '[]');
+    if (saved.length){
+      conversation = saved;
+      $('welcomeScreen').style.display = 'none';
+      renderAll();
+    }
+  } catch(_){ conversation = []; }
+}
+
+// ===== history panel =====
+function toggleHistory(){
+  const p = $('histPanel');
+  p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+  if (p.style.display === 'block') renderHistory();
+}
+
+function renderHistory(){
+  const list = $('histList'); if (!list) return;
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++){
+    const k = localStorage.key(i);
+    if (k && k.startsWith(CONV_PREFIX)) keys.push(k);
+  }
+  list.innerHTML = '';
+  if (!keys.length){
+    list.innerHTML = '<div class="hist-empty">No saved chats</div>';
+    return;
+  }
+  keys.slice().reverse().slice(0, 12).forEach(key => {
+    try {
+      const turns = JSON.parse(localStorage.getItem(key) || '[]');
+      const preview = turns.find(t => t.role === 'user')?.content?.slice(0, 38) || key;
+      const div = document.createElement('div');
+      div.className = 'hist-item';
+      div.textContent = preview + (preview.length >= 38 ? '…' : '');
+      div.title = 'Load this chat';
+      div.onclick = () => loadChat(key);
+      list.appendChild(div);
+    } catch(_){}
+  });
+}
+
+function loadChat(key){
+  try {
+    const data = JSON.parse(localStorage.getItem(key) || '[]');
+    conversation = data;
+    currentSid = key.replace(CONV_PREFIX, '');
+    localStorage.setItem(SID_KEY, currentSid);
+    $('messages').innerHTML = '';
+    $('welcomeScreen').style.display = data.length ? 'none' : 'flex';
+    renderAll();
+    showToast('Conversation loaded', 'success');
+    if (window.innerWidth <= 768) closeSidebar();
+  } catch(_){ showToast('Failed to load', 'error'); }
+}
+
+// ===== sidebar =====
+function toggleSidebar(){
+  const s = $('sidebar'), o = $('sOverlay');
+  const open = s.classList.toggle('open');
+  o.style.display = open ? 'block' : 'none';
+}
+function closeSidebar(){
+  $('sidebar').classList.remove('open');
+  $('sOverlay').style.display = 'none';
+}
+
+// ===== voice =====
+let recognition = null;
+function initVoice(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+  recognition.onresult = e => {
+    const t = e.results[0][0].transcript;
+    const ta = $('userInput');
+    ta.value = t; $('charCount').textContent = t.length;
+    ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
     sendMessage();
+  };
+  recognition.onerror = () => showToast('Voice not recognized.', 'error');
+}
+function startVoice(){
+  if (recognition){ recognition.start(); showToast('Listening…'); }
+  else showToast('Voice not supported in this browser.', 'error');
 }
 
-// Expose handlers used from inline onclicks
+// ===== settings modal =====
+function openSettings(){
+  $('streamToggle').checked = !!cfg.stream;
+  $('autoSaveToggle').checked = !!cfg.autoSave;
+  $('compactToggle').checked = !!cfg.compact;
+  $('settingsModal').classList.add('open');
+}
+function closeSettings(){ $('settingsModal').classList.remove('open'); }
+function saveSettings(){
+  cfg.stream = $('streamToggle').checked;
+  cfg.autoSave = $('autoSaveToggle').checked;
+  cfg.compact = $('compactToggle').checked;
+  saveCfg();
+  applyBodyClasses();
+  closeSettings();
+  showToast('Settings saved!', 'success');
+}
+
+// ===== auth (Flask + Supabase) =====
+async function fetchAuthMe(){
+  try {
+    const r = await fetch('/auth/me');
+    if (r.ok){
+      const d = await r.json();
+      auth.loggedIn = !!d.logged_in;
+      auth.email = d.email || '';
+      $('authNavLabel').textContent = auth.loggedIn ? (auth.email ? auth.email.split('@')[0] : 'Account') : 'Account';
+    }
+  } catch(_){}
+}
+function openAuth(){
+  updateAuthUI();
+  $('authModal').classList.add('open');
+  if (window.innerWidth <= 768) closeSidebar();
+}
+function closeAuth(){ $('authModal').classList.remove('open'); }
+function updateAuthUI(){
+  const status = $('authStatus');
+  const form = $('authFormWrap');
+  const logged = $('authLoggedWrap');
+  const emailDisp = $('authEmailDisplay');
+  if (auth.loggedIn){
+    status.textContent = 'You are signed in.';
+    form.style.display = 'none';
+    logged.style.display = 'block';
+    emailDisp.textContent = auth.email;
+  } else {
+    status.textContent = 'Sign in to sync your conversations.';
+    form.style.display = 'block';
+    logged.style.display = 'none';
+  }
+}
+async function doLogin(){
+  const email = $('authEmail').value.trim();
+  const password = $('authPassword').value;
+  if (!email || !password){ showToast('Email and password required.', 'error'); return; }
+  try {
+    const r = await fetch('/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password })
+    });
+    const d = await r.json();
+    if (r.ok && d.status === 'ok'){
+      auth = { loggedIn:true, email: d.email || email };
+      $('authNavLabel').textContent = (d.email || email).split('@')[0];
+      updateAuthUI();
+      showToast('Logged in!', 'success');
+      closeAuth();
+    } else {
+      showToast(d.error || 'Login failed.', 'error');
+    }
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+async function doSignup(){
+  const email = $('authEmail').value.trim();
+  const password = $('authPassword').value;
+  if (!email || !password || password.length < 8){
+    showToast('Email and 8+ char password required.', 'error'); return;
+  }
+  try {
+    const r = await fetch('/auth/signup', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password })
+    });
+    const d = await r.json();
+    if (r.ok && (d.user || d.status === 'ok')){
+      showToast('Account created! Please log in.', 'success');
+    } else {
+      showToast(d.error || 'Signup failed.', 'error');
+    }
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+async function doLogout(){
+  try {
+    await fetch('/auth/logout', { method:'POST' });
+    auth = { loggedIn:false, email:'' };
+    $('authNavLabel').textContent = 'Account';
+    updateAuthUI();
+    showToast('Logged out.');
+    closeAuth();
+  } catch(_){ showToast('Logout failed.', 'error'); }
+}
+
+// ===== admin (hidden trigger: double-click bottom-left) =====
+function bindAdminHotspot(){
+  // Use both the explicit hotspot and a wider zone
+  const hotspot = $('adminHotspot');
+  if (hotspot) hotspot.addEventListener('dblclick', openAdmin);
+  document.addEventListener('dblclick', e => {
+    if (e.clientX < 80 && (window.innerHeight - e.clientY) < 80) openAdmin();
+  });
+}
+function closeAdmin(){ $('adminPanel').style.display = 'none'; }
+async function openAdmin(){
+  $('adminPanel').style.display = 'flex';
+  // Probe whether already-authed
+  try {
+    const r = await fetch('/admin/stats');
+    if (r.ok){ adminLoggedIn = true; }
+  } catch(_){}
+  await renderAdminContent();
+}
+
+async function renderAdminContent(){
+  const body = $('adminBody');
+
+  if (!adminLoggedIn){
+    body.innerHTML = `
+      <div class="panel-section">
+        <div class="panel-section-title">🔑 Admin Login</div>
+        <input type="password" id="adminPwdInp" class="inp" placeholder="Admin password" autocomplete="off" style="margin-bottom:10px">
+        <div id="adminLoginErr" style="color:var(--kill);font-size:11px;font-family:var(--mono);margin-bottom:8px;min-height:14px"></div>
+        <button class="btn btn-primary" onclick="attemptAdminLogin()">Unlock Console</button>
+      </div>
+    `;
+    $('adminPwdInp').addEventListener('keydown', e => { if (e.key === 'Enter') attemptAdminLogin(); });
+    setTimeout(() => $('adminPwdInp')?.focus(), 50);
+    return;
+  }
+
+  // Fetch live data from backend
+  let stats = {}, keys = [], order = providerOrderCache;
+  try {
+    const [s, k, o] = await Promise.all([
+      fetch('/admin/stats').then(r => r.json()),
+      fetch('/admin/api_keys').then(r => r.json()),
+      fetch('/admin/provider_order').then(r => r.json()),
+    ]);
+    stats = s || {};
+    keys = Array.isArray(k) ? k : ((k && k.keys) || []);
+    if (Array.isArray(o)) { order = o; providerOrderCache = order; }
+    else if (o && Array.isArray(o.order)) { order = o.order; providerOrderCache = order; }
+  } catch(_){}
+
+  body.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">📊 System Stats</div>
+      <div class="stat-row"><span>Conversations</span><span class="stat-val">${stats.total_conversations ?? '—'}</span></div>
+      <div class="stat-row"><span>Active API keys</span><span class="stat-val">${stats.active_api_keys ?? keys.filter(k=>k.is_active).length}</span></div>
+      <div class="stat-row"><span>Users</span><span class="stat-val">${stats.total_users ?? '—'}</span></div>
+      <div class="stat-row"><span>Rate-limited IPs</span><span class="stat-val">${stats.rate_limited_ips ?? 0}</span></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">🔑 API Keys</div>
+      <ul class="key-list" id="keyListAdmin"></ul>
+      <div class="field" style="margin-bottom:6px">
+        <select id="newProvInp" class="inp" style="margin-bottom:6px;cursor:pointer">
+          <option value="groq">groq</option>
+          <option value="openai">openai</option>
+          <option value="claude">claude</option>
+          <option value="gemini">gemini</option>
+          <option value="deepseek">deepseek</option>
+        </select>
+        <input id="newKeyInp" class="inp" placeholder="API key value" type="password">
+      </div>
+      <button class="btn btn-primary" onclick="addAdminKey()">Add / Replace Key</button>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">⚙️ Provider Priority</div>
+      <ul class="key-list" id="priorityAdmin"></ul>
+      <button class="btn btn-primary" onclick="savePriorityAdmin()">Save Order</button>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">💾 Backup</div>
+      <p style="font-size:11px;color:var(--chalk-3);font-family:var(--mono);margin-bottom:10px;line-height:1.6">
+        Bundle this project into a ZIP and upload to Supabase Storage (and GitHub if configured).
+      </p>
+      <button class="btn btn-acid" onclick="runBackup()">Run Backup Now</button>
+    </div>
+
+    <div class="panel-section">
+      <button class="btn btn-ghost" onclick="adminLogout()">Log Out of Admin</button>
+    </div>
+  `;
+
+  // Render keys
+  const keyList = $('keyListAdmin');
+  if (!keys.length){
+    keyList.innerHTML = '<li style="font-size:11px;color:var(--chalk-4);padding:4px 0;font-family:var(--mono)">No keys stored yet.</li>';
+  }
+  keys.forEach(k => {
+    const li = document.createElement('li');
+    li.className = 'key-item';
+    const masked = k.api_key_masked || (k.api_key ? (k.api_key.slice(0,6)+'…'+k.api_key.slice(-4)) : '••••');
+    li.innerHTML = `
+      <span class="key-prov">${esc(k.provider)}</span>
+      <span class="key-mask">${esc(masked)}</span>
+      <span class="key-status">${k.is_active === false ? 'INACTIVE' : 'ACTIVE'}</span>
+      <button class="key-del" data-prov="${esc(k.provider)}" data-id="${k.id ?? ''}">🗑</button>
+    `;
+    keyList.appendChild(li);
+  });
+  document.querySelectorAll('.key-del').forEach(btn => {
+    btn.onclick = () => deleteAdminKey(btn.dataset.prov, btn.dataset.id);
+  });
+
+  // Drag-drop priority list
+  const priUl = $('priorityAdmin');
+  let draggedEl = null;
+  order.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'key-item drag-item';
+    li.draggable = true;
+    li.dataset.provider = p;
+    li.innerHTML = `<span class="key-prov">${esc(p)}</span><span class="key-mask">drag to reorder</span><span class="drag-handle">⠿</span>`;
+    li.addEventListener('dragstart', () => { draggedEl = li; li.classList.add('dragging'); });
+    li.addEventListener('dragend',   () => { li.classList.remove('dragging'); draggedEl = null; });
+    li.addEventListener('dragover',  e => {
+      e.preventDefault();
+      if (draggedEl && draggedEl !== li){
+        const rect = li.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > rect.height / 2;
+        priUl.insertBefore(draggedEl, after ? li.nextSibling : li);
+      }
+    });
+    priUl.appendChild(li);
+  });
+}
+
+async function attemptAdminLogin(){
+  const pwd = $('adminPwdInp').value;
+  try {
+    const r = await fetch('/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ password: pwd })
+    });
+    if (r.ok){
+      adminLoggedIn = true;
+      showToast('Admin access granted.', 'success');
+      renderAdminContent();
+    } else {
+      $('adminLoginErr').textContent = 'Incorrect password.';
+    }
+  } catch(_){
+    $('adminLoginErr').textContent = 'Network error.';
+  }
+}
+
+async function addAdminKey(){
+  const provider = $('newProvInp').value.trim().toLowerCase();
+  const api_key  = $('newKeyInp').value.trim();
+  if (!provider || !api_key){ showToast('Provider and key required.', 'error'); return; }
+  try {
+    const r = await fetch('/admin/api_keys', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ provider, api_key })
+    });
+    if (r.ok){ showToast(`Key for "${provider}" saved.`, 'success'); renderAdminContent(); }
+    else showToast('Failed to save key.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+async function deleteAdminKey(provider, id){
+  if (!id){ showToast('Missing key id.', 'error'); return; }
+  if (!confirm(`Delete key for ${provider}?`)) return;
+  try {
+    const r = await fetch('/admin/api_keys', {
+      method:'DELETE', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: Number(id) })
+    });
+    if (r.ok){ showToast(`Key for "${provider}" deleted.`); renderAdminContent(); }
+    else showToast('Failed to delete.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+async function savePriorityAdmin(){
+  const items = [...document.querySelectorAll('#priorityAdmin .drag-item')];
+  const order = items.map(li => li.dataset.provider);
+  try {
+    const r = await fetch('/admin/provider_order', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ order })
+    });
+    if (r.ok){ providerOrderCache = order; showToast('Provider order saved.', 'success'); }
+    else showToast('Failed to save order.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+async function runBackup(){
+  showToast('Running backup…');
+  try {
+    const r = await fetch('/admin/backup', { method:'POST' });
+    const d = await r.json();
+    if (r.ok && !d.error) showToast('Backup complete!', 'success');
+    else showToast((d.error || '').slice(0,80) || 'Backup failed.', 'error');
+  } catch(_){ showToast('Network error.', 'error'); }
+}
+
+async function adminLogout(){
+  try { await fetch('/admin/logout', { method:'POST' }); } catch(_){}
+  adminLoggedIn = false;
+  closeAdmin();
+  showToast('Admin signed out.');
+}
+
+// ===== modal backdrop dismiss =====
+function bindModalDismiss(){
+  ['settingsModal','authModal'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+  });
+}
+
+// expose globals for inline onclicks
 window.sendMessage = sendMessage;
-window.clearChat = clearChat;
+window.useSuggestion = useSuggestion;
 window.newChat = newChat;
-window.toggleAuthModal = toggleAuthModal;
-window.closeAuthModal = closeAuthModal;
+window.clearChat = clearChat;
+window.exportChat = exportChat;
+window.toggleHistory = toggleHistory;
+window.startVoice = startVoice;
+window.openSettings = openSettings;
+window.closeSettings = closeSettings;
+window.saveSettings = saveSettings;
+window.openAuth = openAuth;
+window.closeAuth = closeAuth;
+window.doLogin = doLogin;
+window.doSignup = doSignup;
+window.doLogout = doLogout;
 window.toggleSidebar = toggleSidebar;
 window.closeSidebar = closeSidebar;
-window.useSuggestion = useSuggestion;
-window.startVoiceInput = startVoiceInput;
-window.scrollChat = scrollChat;
-
-// ESC closes modals/panels; click outside auth modal closes it
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        if (authModal.classList.contains('open')) closeAuthModal();
-        if (document.getElementById('adminPanel').classList.contains('open')) document.getElementById('adminPanel').classList.remove('open');
-        if (sidebarEl.classList.contains('open')) closeSidebar();
-    }
-});
-authModal.addEventListener('click', (e) => { if (e.target === authModal) closeAuthModal(); });
-
-renderHistory();
-checkAuthStatus();
+window.openAdmin = openAdmin;
+window.closeAdmin = closeAdmin;
+window.attemptAdminLogin = attemptAdminLogin;
+window.addAdminKey = addAdminKey;
+window.deleteAdminKey = deleteAdminKey;
+window.savePriorityAdmin = savePriorityAdmin;
+window.runBackup = runBackup;
+window.adminLogout = adminLogout;

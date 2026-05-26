@@ -1,0 +1,113 @@
+
+## PHASE 2: The "Invisible" AI Layer (Cloudflare Workers)
+
+In `/apps/edge/`, build a Cloudflare Worker that acts as the ONLY interface between users and AI providers:
+
+1. **Create `src/router.ts`** — Multi-model intelligent router:
+ - Accept requests at `POST /v1/chat/completions`
+ - Request body: `{ messages, model?, temperature?, max_tokens?, stream? }`
+ - Model mapping (hidden from users):
+   - `hormulse-pro` → GPT-4o (primary) / Claude 3.5 Sonnet (fallback)
+   - `hormulse-fast` → GPT-3.5 Turbo / DeepSeek-V3
+   - `hormulse-reasoning` → o1-preview / DeepSeek-R1
+   - `hormulse-vision` → GPT-4o-vision / Gemini 1.5 Pro
+ - Load balancing: Round-robin between providers to avoid rate limits
+ - Fallback logic: If primary fails in <2s, auto-switch to secondary
+ - Cost optimization: Route simple queries to cheaper models automatically
+
+2. **Create `src/providers/`** with adapters for:
+ - OpenAI (`openai.ts`)
+ - Anthropic (`anthropic.ts`) 
+ - Google Gemini (`gemini.ts`)
+ - DeepSeek (`deepseek.ts`)
+ - Each adapter normalizes request/response format to OpenAI-compatible schema
+
+3. **Create `src/middleware/`**:
+ - `auth.ts`: Validate JWT from Supabase, extract user plan/tier
+ - `rateLimit.ts`: Redis-backed rate limiting per user (free: 50/hr, pro: unlimited, enterprise: custom)
+ - `costTracker.ts`: Log every inference cost to Supabase for billing
+ - `cache.ts`: Cache common educational queries (e.g., "explain photosynthesis") for 1 hour
+
+4. **Environment variables** (stored in Cloudflare secrets, NEVER in code):
+ - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`
+ - `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
+ - `REDIS_URL` (Upstash Redis)
+
+5. **Deploy to Cloudflare Workers** with custom domain: `api.hormulse.com`
+
+## PHASE 3: Next.js 14 Web Application
+
+In `/apps/web/`, build the main SaaS platform:
+
+### Authentication & Authorization
+- NextAuth.js v5 with OAuth (Google, GitHub, Microsoft for schools)
+- Supabase Auth for email/password with Row Level Security
+- Role system: `student`, `teacher`, `admin`, `institution_owner`
+- JWT contains: userId, plan, institutionId, rateLimitTier
+
+### Core Features
+
+1. **AI Chat Interface** (`/app/chat/`):
+ - Streaming responses using Server-Sent Events
+ - Message history stored in Supabase (encrypted at rest)
+ - Support for: text, code blocks with syntax highlighting, LaTeX math, image upload (vision models)
+ - "Deep Reasoning" toggle: routes to reasoning models with chain-of-thought display
+ - Export: PDF, Markdown, Shareable link
+
+2. **AI Tutor Personas** (`/app/tutors/`):
+ - Pre-configured system prompts for different subjects:
+   - "Professor Quantum" (Physics)
+   - "Code Mentor" (Programming)
+   - "History Scholar" (History)
+   - "Math Wizard" (Mathematics)
+ - Each persona has custom few-shot examples and response formatting
+ - Users can create custom personas (Pro+ feature)
+
+3. **Document Intelligence** (`/app/documents/`):
+ - Upload PDFs, images, Word docs
+ - RAG pipeline: Parse → Chunk → Embed (using OpenAI embeddings) → Store in Supabase pgvector
+ - Chat with documents: "Summarize chapter 3", "Find all formulas"
+ - Citation tracking: Every AI response cites source document pages
+
+4. **Code Execution Environment** (`/app/code/`):
+ - Sandboxed code execution using Piston API or self-hosted
+ - Support: Python, JavaScript, C++, Java
+ - AI-generated code can be run immediately with output display
+ - Save code snippets to personal library
+
+5. **Study Tools** (`/app/study/`):
+ - Flashcard generator from any text (AI-powered)
+ - Quiz generator with adaptive difficulty
+ - Note-taking with AI summarization
+ - Spaced repetition algorithm
+
+6. **Dashboard & Analytics** (`/app/dashboard/`):
+ - Usage stats: messages sent, tokens used, time spent
+ - Learning progress: subjects mastered, weak areas
+ - Cost transparency: "You've used $3.42 of AI compute this month"
+ - Recharts for data visualization
+
+### Database Schema (Supabase)
+
+```sql
+-- Users & Authentication
+users (id, email, name, avatar_url, plan, institution_id, created_at)
+
+-- Organizations (for institutions/teams)
+institutions (id, name, domain, plan, settings, branding_colors, logo_url, custom_domain)
+
+-- AI Conversations
+conversations (id, user_id, title, model_used, token_count, cost, created_at, updated_at)
+messages (id, conversation_id, role, content, tokens, latency_ms, created_at)
+
+-- Documents & RAG
+documents (id, user_id, title, content_chunks, embedding, metadata, created_at)
+
+-- Usage Tracking
+usage_logs (id, user_id, action, model, tokens_in, tokens_out, cost_usd, timestamp)
+
+-- Subscriptions
+subscriptions (id, user_id, stripe_subscription_id, plan, status, current_period_end)
+
+-- Custom Personas
+personas (id, user_id, name, system_prompt, avatar, is_public, usage_count)

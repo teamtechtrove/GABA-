@@ -1,0 +1,72 @@
+// FounderSection.tsx
+// THIS IS THE MOST IMPORTANT SECTION — Premium, personal, credible
+// Full-width section with distinct background treatment
+
+Background:
+- Slightly different from page bg: bg-gaba-surface
+- Subtle top and bottom borders: border-y border-gaba-border
+
+Layout: Two columns on desktop (60/40 split), stacked on mobile
+
+LEFT COLUMN (Content):
+- Section label: "MEET THE FOUNDER" — uppercase, tracking-widest, text-gaba-accent, text-sm, font-semibold
+- Name: "Fardin Arman Rafi" — text-5xl md:text-6xl, font-bold, text-white
+- Title: "Founder & Creator, GABA AI" — text-xl, text-gaba-accent, font-medium
+- Location: "Dhaka, Bangladesh" — text-gaba-textMuted, flex with MapPin icon
+
+- Bio (3-4 paragraphs, compelling narrative):
+  
+  Paragraph 1 (The Professional): "A finance and banking professional with hands-on experience in logistics, freight forwarding, and strategic sales across Dhaka. With deep expertise in accounts, finance operations, and team leadership, Arman has consistently driven growth through strategic relationships and analytical precision."
+  
+  Paragraph 2 (The Pivot): "But beneath the spreadsheets and sales targets lived a relentless curiosity about technology and its power to transform how people learn, work, and think. That curiosity became GABA — a project born from the belief that world-class AI shouldn't be confined to Silicon Valley."
+  
+  Paragraph 3 (The Philosophy): "Arman approaches AI with the same discipline he applies to finance: rigorous, methodical, and always focused on delivering real value. GABA isn't just a product — it's a testament to what's possible when professional expertise meets technological ambition."
+  
+  Paragraph 4 (The Vision): "From the streets of Dhaka to the global digital stage, this is proof that innovation knows no borders. Great technology doesn't require a massive team — just relentless curiosity and an unwavering commitment to excellence."
+
+- Key traits (horizontal flex, wrap):
+  - "Strategic Thinker" — badge with Lightbulb icon
+  - "Quick Learner" — badge with Zap icon
+  - "Finance Expert" — badge with TrendingUp icon
+  - "Tech Builder" — badge with Code icon
+  - "Team Leader" — badge with Users icon
+
+- Portfolio CTA (THE CRITICAL LINK):
+  This must be the most prominent interactive element in the section.
+  
+  Design:
+  - Button: bg-gaba-accent, text-white, rounded-xl, px-8 py-4, text-lg, font-semibold
+  - Icon: ExternalLink (lucide-react) on right side
+  - Hover: bg-gaba-accentHover, scale-105, shadow-gaba-accentGlow
+  - Active: scale-95
+  - Link: https://portfolioofarman.netlify.app/
+  - MUST have: target="_blank", rel="noopener noreferrer"
+  - Add tracking: onClick log event "portfolio_click" (console.log for now, ready for analytics)
+  
+  Button text: "View Full Portfolio →"
+  
+  Below button, add subtle text: "Explore my professional journey, skills, and experience"
+  
+  ALSO add a secondary text link in the bio:
+  "Learn more about my background and expertise on my [portfolio](https://portfolioofarman.netlify.app/)."
+
+RIGHT COLUMN (Visual):
+- Founder photo container
+- Photo: Use the image from portfolio — https://portfolioofarman.netlify.app/assets/hero.png
+- Frame: rounded-2xl, overflow-hidden, border-2 border-gaba-border
+- Shadow: shadow-2xl shadow-gaba-accent/10
+- Hover: subtle scale(1.02) transition
+- Aspect ratio: 3:4 (portrait)
+- Object-fit: cover
+- Alt text: "Fardin Arman Rafi, Founder of GABA AI"
+- Below photo: small caption text "Fardin Arman Rafi — Dhaka, Bangladesh"
+
+- Decorative elements:
+  - Floating accent shapes behind photo (absolute positioned, blurred, low opacity)
+  - Small geometric accents in corners
+
+Animation:
+- Photo fades in from right with slight rotation (rotate-2 → rotate-0)
+- Text content staggers in from left
+- Badges pop in with 0.1s stagger
+- Button has subtle pulse-glow animation on load

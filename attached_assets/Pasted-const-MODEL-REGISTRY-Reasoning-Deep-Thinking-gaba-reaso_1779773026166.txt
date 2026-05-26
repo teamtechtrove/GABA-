@@ -1,0 +1,75 @@
+const MODEL_REGISTRY = {
+  // Reasoning & Deep Thinking
+  'gaba-reasoning-pro': {
+    providers: [
+      { name: 'openai', model: 'o3-pro', priority: 1, costPer1M: 15 },
+      { name: 'anthropic', model: 'claude-opus-4-6', priority: 2, costPer1M: 75 },
+      { name: 'deepseek', model: 'deepseek-r1', priority: 3, costPer1M: 2 },
+    ],
+    capabilities: ['reasoning', 'math', 'science', 'coding'],
+    maxTokens: 128000,
+    contextWindow: 200000,
+  },
+  
+  // General Intelligence
+  'gaba-pro': {
+    providers: [
+      { name: 'openai', model: 'gpt-5-4', priority: 1, costPer1M: 15 },
+      { name: 'anthropic', model: 'claude-sonnet-4-5', priority: 2, costPer1M: 15 },
+      { name: 'google', model: 'gemini-3-1-pro', priority: 3, costPer1M: 12 },
+      { name: 'moonshot', model: 'kimi-k2-5', priority: 4, costPer1M: 3 },
+    ],
+    capabilities: ['general', 'writing', 'analysis', 'multimodal'],
+    maxTokens: 128000,
+    contextWindow: 256000,
+  },
+  
+  // Fast & Cheap
+  'gaba-fast': {
+    providers: [
+      { name: 'openai', model: 'gpt-4-1-mini', priority: 1, costPer1M: 0.6 },
+      { name: 'anthropic', model: 'claude-haiku-3-5', priority: 2, costPer1M: 1 },
+      { name: 'google', model: 'gemini-3-flash', priority: 3, costPer1M: 0.5 },
+      { name: 'moonshot', model: 'kimi-k2-5-lite', priority: 4, costPer1M: 0.3 },
+    ],
+    capabilities: ['quick', 'chat', 'simple'],
+    maxTokens: 64000,
+    contextWindow: 128000,
+  },
+  
+  // Coding Specialist
+  'gaba-code': {
+    providers: [
+      { name: 'anthropic', model: 'claude-opus-4-6', priority: 1, costPer1M: 75 },
+      { name: 'openai', model: 'gpt-5-4', priority: 2, costPer1M: 15 },
+      { name: 'xai', model: 'grok-4', priority: 3, costPer1M: 15 },
+    ],
+    capabilities: ['coding', 'debugging', 'architecture', 'review'],
+    maxTokens: 128000,
+    contextWindow: 1000000, // 1M for Claude
+  },
+  
+  // Vision & Multimodal
+  'gaba-vision': {
+    providers: [
+      { name: 'openai', model: 'gpt-4o-vision', priority: 1, costPer1M: 15 },
+      { name: 'google', model: 'gemini-3-1-pro-vision', priority: 2, costPer1M: 12 },
+      { name: 'anthropic', model: 'claude-sonnet-4-5-vision', priority: 3, costPer1M: 15 },
+    ],
+    capabilities: ['vision', 'image-analysis', 'document-ocr', 'chart-reading'],
+    maxTokens: 64000,
+    contextWindow: 128000,
+  },
+  
+  // Long Context Specialist
+  'gaba-long': {
+    providers: [
+      { name: 'google', model: 'gemini-3-1-pro', priority: 1, costPer1M: 12 }, // 2M context
+      { name: 'anthropic', model: 'claude-sonnet-4-5', priority: 2, costPer1M: 15 }, // 200K
+      { name: 'moonshot', model: 'kimi-k2-5', priority: 3, costPer1M: 3 }, // 256K
+    ],
+    capabilities: ['long-document', 'book-analysis', 'codebase', 'research'],
+    maxTokens: 128000,
+    contextWindow: 2000000, // 2M for Gemini
+  },
+};

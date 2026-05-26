@@ -1,0 +1,199 @@
+Install dependencies:
+```bash
+# Core
+npm install next@14 react@18 react-dom@18 typescript tailwindcss @tailwindcss/typography
+npm install @radix-ui/react-* framer-motion lucide-react clsx tailwind-merge
+npm install zustand @tanstack/react-query axios zod react-hook-form .# AI & Agents
+npm install openai @anthropic-ai/sdk @google/generative-ai . npm install ai vercel/ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google
+# Real-time & Collaboration
+npm install socket.io-client partykit yjs @yjs/react
+# Browser Automation
+npm install puppeteer-core playwright-core cheerio
+# Voice & Media
+npm install @deepgram/sdk speech-recognition-react
+npm install react-player react-webcam
+# Database & Auth
+npm install @supabase/supabase-js @supabase/auth-helpers-nextjs
+npm install prisma @prisma/client
+# Payments
+npm install stripe @stripe/stripe-js // Route based on: query analysis, cost optimization, availability, user tier
+function routeRequest(request: AIRequest): ModelRoute {
+  const analysis = analyzeQuery(request.messages);
+    // Step 1: Determine required capabilities
+  const requiredCaps = determineCapabilities(analysis);
+    // Step 2: Filter models by capability match
+  const candidates = Object.entries(MODEL_REGISTRY)
+    .filter(([_, config]) => 
+      requiredCaps.every(cap => config.capabilities.includes(cap))
+    );
+    // Step 3: Score by: capability match %, cost, latency, user preference
+  const scored = candidates.map(([id, config]) => ({
+    id,
+    score: calculateScore(config, request.userTier, request.preferences),
+    config,
+  }));
+    // Step 4: Select top model with fallback chain
+  const primary = scored.sort((a, b) => b.score - a.score)[0]; const fallbacks = scored.slice(1, 3).map(s => s.id);
+  return { primary: primary.id, fallbacks, providers: primary.config.providers };}
+function analyzeQuery(messages: Message[]): QueryAnalysis {
+  const text = messages.map(m => m.content).join(' ');
+  return {    intent: classifyIntent(text), // coding, research, creative, analysis, chat
+    complexity: scoreComplexity(text), // 1-10
+    requiresVision: hasImages(messages),
+    requiresCode: detectCodeRequest(text),
+    requiresResearch: detectResearchNeed(text),
+    requiresMath: detectMath(text),
+    language: detectLanguage(text),
+    estimatedTokens: estimateTokens(text),
+    urgency: detectUrgency(text),  };}
+// If primary model fails (rate limit, error, timeout < 3s):
+// 1. Try next provider for same model family
+// 2. Try next model in fallback chain
+// 3. Degrade to cheaper model with prompt enhancement
+// 4. Return graceful error with retry option
+// Cost optimization: For simple queries, automatically downgrade to cheaper model
+// Quality assurance: For complex queries, always use top-tier model
+// /packages/agents/src/GabaAgent.ts
+interface AgentTask {
+  id: string; type: 'research' | 'code' | 'browser' | 'analysis' | 'creative'; goal: string; context: AgentContext; tools: Tool[]; maxSteps: number; currentStep: number;
+  status: 'planning' | 'executing' | 'reviewing' | 'complete' | 'error'; memory: StepMemory[];}
+class GabaAgent {  async execute(task: AgentTask): Promise<AgentResult> {
+    // Step 1: Plan — Break task into sub-tasks
+    const plan = await this.plan(task);
+      // Step 2: Execute — Run each step with tool selection
+    for (const step of plan.steps) {
+      const tool = this.selectTool(step);
+      const result = await tool.execute(step);
+      task.memory.push({ step, result });
+        // Step 3: Review — Check if step succeeded
+      const review = await this.review(step, result);
+      if (!review.success) {
+        const fix = await selfCorrect(step, review.feedback);
+        task.memory.push({ step: fix, result: await tool.execute(fix) });   }    }
+       // Step 4: Synthesize — Compile final answer
+    return this.synthesize(task.memory);  }   }
+const TOOLS = {   // Web Tools
+  web_search: { provider: 'serper' | 'tavily' | 'brave', type: 'search' },
+  web_scrape: { provider: 'firecrawl' | 'jina', type: 'scrape' },  web_browse: { provider: 'puppeteer' | 'playwright', type: 'browser' },  // Code Tools
+  code_execute: { runtime: 'docker', languages: ['python', 'js', 'ts', 'rust', 'go'] },
+  code_lint: { type: 'static_analysis' },
+  code_test: { type: 'test_runner' },  // Data Tools
+  data_query: { type: 'sql', engines: ['postgres', 'mysql', 'sqlite'] },
+  data_visualize: { type: 'chart', libraries: ['plotly', 'matplotlib'] },
+  
+  // Communication Tools
+  email_send: { provider: 'resend' | 'sendgrid' },
+  slack_notify: { type: 'webhook' },
+  calendar_schedule: { provider: 'google' | 'microsoft' },
+  
+  // File Tools
+  file_read: { type: 'filesystem' },
+  file_write: { type: 'filesystem' },
+  file_convert: { type: 'pandoc', formats: ['pdf', 'docx', 'md'] },
+};
+async function deepResearch(query: string, depth: 'quick' | 'standard' | 'deep'): Promise<ResearchReport> {
+  // Step 1: Query Expansion
+  const subQueries = await expandQuery(query, depth);
+  
+  // Step 2: Parallel Search
+  const searchResults = await Promise.all(
+    subQueries.map(q => searchWeb(q, { maxResults: 10, recency: 'any' }))
+  );
+  
+  // Step 3: Source Filtering & Ranking
+  const rankedSources = rankSources(searchResults.flat(), {
+    authority: 0.4,
+    recency: 0.3,
+    relevance: 0.3,
+  });
+  
+  // Step 4: Content Extraction
+  const contents = await Promise.all(
+    rankedSources.slice(0, 20).map(s => extractContent(s.url))
+  );
+  
+  // Step 5: Synthesis & Analysis
+  const synthesis = await synthesize(contents, query);
+  
+  // Step 6: Fact-Checking
+  const verified = await factCheck(synthesis.claims);
+  
+  // Step 7: Report Generation
+  return generateReport({
+    query,
+    summary: synthesis.summary,
+    sections: synthesis.sections,
+    sources: rankedSources.map((s, i) => ({ ...s, citation: `[${i + 1}]` })),
+    confidence: verified.confidenceScore,
+    generatedAt: new Date(),
+  });
+}
+// Docker-based sandbox for each user session
+// Isolated network, filesystem, CPU/memory limits
+// Pre-installed: Python, Node.js, Rust, Go, Java, C++, Ruby
+
+interface Sandbox {
+  id: string;
+  userId: string;
+  language: string;
+  files: FileSystem;
+  terminal: TerminalSession;
+  preview: PreviewServer; // For web apps
+  database: SQLiteInstance; // Isolated DB per sandbox
+}
+// Real-time voice conversation
+// STT → LLM → TTS with <500ms latency
+
+const voicePipeline = {
+  stt: {
+    provider: 'deepgram' | 'assemblyai' | 'whisper',
+    model: 'nova-2',
+    language: 'auto-detect',
+    interimResults: true,
+  },
+  llm: {
+    model: 'gaba-pro',
+    systemPrompt: 'You are GABA, a helpful AI assistant. Respond concisely and naturally.',
+    streaming: true,
+  },
+  tts: {
+    provider: 'elevenlabs' | 'deepgram' | 'cartesia',
+    voice: 'natural', // Multiple voice options
+    speed: 1.0,
+    emotion: 'neutral',
+  },
+};
+interface UserMemory {
+  // Explicit Memory (user-told facts)
+  facts: Fact[]; // "I work at AHM Express", "I prefer Python"
+  
+  // Implicit Memory (inferred from behavior)
+  preferences: Preference[]; // Coding style, response length, tone
+  
+  // Conversation Memory (recent context)
+  recentConversations: ConversationSummary[];
+  
+  // Knowledge Graph (relationships between concepts)
+  knowledgeGraph: Graph; 
+  // Document Memory (uploaded files)
+  documents: Document[];
+} class MemoryManager {
+  async store(userId: string, memory: MemoryEntry): Promise<void> {
+    // Embed memory using text embedding model
+    const embedding = await embed(memory.content);
+    
+    // Store in vector DB (Supabase pgvector)
+    await db.memory.create({
+      userId,
+      content: memory.content,
+      embedding,
+      type: memory.type,
+      importance: scoreImportance(memory),
+      createdAt: new Date(),
+    });  } async recall(userId: string, query: string, k: number = 5): Promise<Memory[]> {
+    const embedding = await embed(query);
+    return db.memory.similaritySearch(embedding, k, { userId });
+  }
+}
+
+

@@ -1,0 +1,25 @@
+name = "gaba-ai-router"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# ── KV namespace for rate limiting ─────────────────────────────────────────
+# Create with: wrangler kv namespace create RATE_LIMIT_KV
+# Then replace the placeholder id below with the real one.
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# ── Secrets (set via `wrangler secret put <NAME>`) ─────────────────────────
+# SUPABASE_URL           — your Supabase project URL
+# SUPABASE_JWT_SECRET    — JWT secret from Supabase > Settings > API
+# SUPABASE_SERVICE_KEY   — service-role key for usage_logs writes
+# OPENAI_API_KEY         — OpenAI secret key
+# ANTHROPIC_API_KEY      — Anthropic secret key
+# GEMINI_API_KEY         — Google AI / Gemini key
+# DEEPSEEK_API_KEY       — DeepSeek key
+# GROQ_API_KEY           — Groq key
+
+# ── Environment variables (non-secret) ─────────────────────────────────────
+[vars]
+ALLOWED_ORIGINS = "https://api.gaba.ai,https://*.replit.dev,https://*.repl.co"

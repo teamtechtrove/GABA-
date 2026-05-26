@@ -239,6 +239,31 @@ def web_search(query):
     except Exception as e:
         return f"Search error: {str(e)}"
 
+# ========== WORKER PROXY ==========
+WORKER_URL = os.environ.get("WORKER_URL", "").rstrip("/")
+
+def _proxy_to_worker(messages, access_token, model="hormulse-fast"):
+    """Forward a chat request to the Cloudflare Worker AI router.
+    Returns (reply_text, provider_name) or raises on failure."""
+    url = f"{WORKER_URL}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messages": messages,
+        "model": model,
+        "stream": False,
+        "temperature": 0.7,
+        "max_tokens": 2048,
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    reply = data["choices"][0]["message"]["content"]
+    provider = data.get("_provider", "worker")
+    return reply, provider
+
 # ========== AGENT WITH TOOL USE ==========
 def agent_response(user_input, history, user_id=None):
     if is_dangerous(user_input):
@@ -254,6 +279,19 @@ def agent_response(user_input, history, user_id=None):
                 user_input = f"User asked to search for: {query}\nSearch results:\n{search_result}\nBased on these results, answer the user's query naturally."
 
     messages = [{"role": "system", "content": get_active_system_prompt()}] + history[-20:] + [{"role": "user", "content": user_input}]
+
+    # ── Try Cloudflare Worker proxy first (when WORKER_URL is configured) ──
+    if WORKER_URL:
+        access_token = session.get("access_token")
+        if access_token:
+            try:
+                reply, provider = _proxy_to_worker(messages, access_token)
+                return {"reply": sanitize_output(reply), "provider": provider}
+            except Exception as worker_err:
+                # Worker unavailable — fall through to direct provider calls
+                app.logger.warning(f"Worker proxy failed, falling back: {worker_err}")
+
+    # ── Direct provider fallback (always works without WORKER_URL) ──
     provider_order = get_provider_order()
     disabled = set(get_setting("disabled_providers", [], list) or [])
     for provider in provider_order:

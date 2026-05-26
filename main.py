@@ -340,6 +340,11 @@ def chat():
 
 # ========== RENDERING ==========
 @app.route("/")
+@app.route("/landing")
+def landing():
+    return render_template("landing.html")
+
+@app.route("/chat")
 def home():
     return render_template("index.html")
 

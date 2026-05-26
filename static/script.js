@@ -535,7 +535,7 @@ function adminTabs(active){
   const tabs = [
     ['dashboard','Dashboard'],['keys','Keys'],['providers','Providers'],
     ['settings','Settings'],['prompt','Prompt'],['users','Users'],
-    ['conversations','Chats'],['backup','Backup'],['password','Password'],
+    ['conversations','Chats'],['usage','Usage'],['backup','Backup'],['password','Password'],
   ];
   return `<div class="adm-tabs">${tabs.map(([id,label]) =>
     `<button class="adm-tab${active===id?' active':''}" onclick="setAdminTab('${id}')">${label}</button>`
@@ -571,6 +571,7 @@ async function renderAdminContent(){
     case 'prompt':        return renderTabPrompt();
     case 'users':         return renderTabUsers();
     case 'conversations': return renderTabConversations();
+    case 'usage':         return renderTabUsage();
     case 'backup':        return renderTabBackup();
     case 'password':      return renderTabPassword();
   }
@@ -974,6 +975,51 @@ async function deleteConversation(id){
     if (r.ok){ showToast('Deleted.', 'success'); loadConversations($('convSearchInp')?.value || ''); }
     else showToast('Delete failed.', 'error');
   } catch(_){ showToast('Network error.', 'error'); }
+}
+
+// ---------- Usage ----------
+async function renderTabUsage(){
+  const tb = $('admTabBody');
+  tb.innerHTML = `<div class="adm-empty">Loading usage stats…</div>`;
+  let rows = [];
+  try { rows = await fetch('/admin/usage_stats').then(r=>r.json()); } catch(_){}
+  if (!Array.isArray(rows)) rows = [];
+
+  const totalTokens = rows.reduce((s, r) => s + (r.tokens_out || 0), 0);
+  const totalCost   = rows.reduce((s, r) => s + (r.cost_usd || 0), 0);
+  const totalCalls  = rows.reduce((s, r) => s + (r.calls || 0), 0);
+
+  tb.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">📈 Token Usage — Last 30 Days</div>
+      <div class="stat-row"><span>Total tokens out</span><span class="stat-val">${totalTokens.toLocaleString()}</span></div>
+      <div class="stat-row"><span>Total API calls</span><span class="stat-val">${totalCalls.toLocaleString()}</span></div>
+      <div class="stat-row"><span>Estimated cost</span><span class="stat-val">$${totalCost.toFixed(4)}</span></div>
+      <div class="btn-row-tight" style="margin-top:10px">
+        <button class="adm-mini" onclick="renderTabUsage()">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">👤 Top Users by Token Consumption</div>
+      ${rows.length === 0
+        ? '<div class="adm-empty">No usage data yet. Logs are populated when token counts are recorded via the API.</div>'
+        : `<ul class="adm-list" id="usageListAdmin"></ul>`}
+    </div>`;
+
+  if (!rows.length) return;
+  const list = $('usageListAdmin');
+  rows.forEach((r, i) => {
+    const li = document.createElement('li');
+    li.className = 'adm-list-item';
+    li.innerHTML = `
+      <span style="color:var(--chalk-4);font-family:var(--mono);font-size:11px;width:22px">${i+1}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--chalk-2)">${esc(r.email || r.user_id || '—')}</span>
+      <span class="adm-pill prov">${(r.tokens_out||0).toLocaleString()} tok</span>
+      <span class="adm-pill on">${r.calls||0} calls</span>
+      <span style="color:var(--chalk-4);font-size:10px;font-family:var(--mono)">$${(r.cost_usd||0).toFixed(4)}</span>
+    `;
+    list.appendChild(li);
+  });
 }
 
 // ---------- Backup ----------

@@ -668,6 +668,246 @@ def admin_export(kind):
         return jsonify(_load_settings())
     return jsonify({"error": "Unknown export kind"}), 400
 
+# ========== API: usage ==========
+@app.route("/api/usage", methods=["GET"])
+def api_usage():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    try:
+        since = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        res = supabase.table("usage_logs").select(
+            "tokens_in,tokens_out,cost_usd,logged_at,provider,model"
+        ).eq("user_id", user_id).gte("logged_at", since).order("logged_at", desc=False).execute()
+        rows = res.data or []
+        # aggregate by day
+        by_day = {}
+        for r in rows:
+            day = (r.get("logged_at") or "")[:10]
+            if day not in by_day:
+                by_day[day] = {"date": day, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "calls": 0}
+            by_day[day]["tokens_in"]  += r.get("tokens_in", 0) or 0
+            by_day[day]["tokens_out"] += r.get("tokens_out", 0) or 0
+            by_day[day]["cost_usd"]   += float(r.get("cost_usd", 0) or 0)
+            by_day[day]["calls"]      += 1
+        return jsonify(sorted(by_day.values(), key=lambda x: x["date"]))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== API: subscription ==========
+@app.route("/api/subscription", methods=["GET"])
+def api_subscription():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    try:
+        res = supabase.table("subscriptions").select("*").eq("user_id", user_id).limit(1).execute()
+        if res.data:
+            return jsonify(res.data[0])
+        # also return user plan from users table as fallback
+        usr = supabase.table("users").select("plan").eq("id", user_id).limit(1).execute()
+        plan = (usr.data[0].get("plan") if usr.data else None) or "free"
+        return jsonify({"user_id": user_id, "plan": plan, "status": "none"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== API: Stripe checkout ==========
+@app.route("/api/stripe/create-checkout", methods=["POST"])
+def stripe_create_checkout():
+    user_id = session.get("user_id")
+    user_email = session.get("user_email", "")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = request.json or {}
+    plan = (data.get("plan") or "pro").lower()
+    try:
+        from stripe_helpers import create_checkout_session, STRIPE_PRO_PRICE_ID
+        if not STRIPE_PRO_PRICE_ID:
+            return jsonify({"error": "Stripe is not configured on this server."}), 503
+        base_url = request.host_url.rstrip("/")
+        session_obj = create_checkout_session(
+            user_id=user_id,
+            user_email=user_email,
+            plan=plan,
+            success_url=base_url + "/chat?upgraded=1",
+            cancel_url=base_url + "/chat?cancelled=1",
+        )
+        return jsonify({"url": session_obj.url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# ========== API: Stripe webhook ==========
+@app.route("/api/stripe/webhook", methods=["POST"])
+def stripe_webhook():
+    payload = request.get_data()
+    sig_header = request.headers.get("Stripe-Signature", "")
+    try:
+        from stripe_helpers import construct_webhook_event, STRIPE_WEBHOOK_SECRET
+        if not STRIPE_WEBHOOK_SECRET:
+            return jsonify({"error": "Webhook secret not configured"}), 503
+        event = construct_webhook_event(payload, sig_header)
+    except Exception as e:
+        app.logger.error(f"Stripe webhook signature error: {e}")
+        return jsonify({"error": "Invalid signature"}), 400
+
+    event_type = event.get("type", "")
+    data_obj   = event.get("data", {}).get("object", {})
+
+    try:
+        if event_type == "checkout.session.completed":
+            user_id = data_obj.get("client_reference_id") or (data_obj.get("metadata") or {}).get("user_id")
+            plan    = (data_obj.get("metadata") or {}).get("plan", "pro")
+            stripe_customer_id = data_obj.get("customer")
+            stripe_sub_id      = data_obj.get("subscription")
+            if user_id:
+                supabase.table("users").update({"plan": plan}).eq("id", user_id).execute()
+                supabase.table("subscriptions").upsert({
+                    "user_id": user_id,
+                    "stripe_customer_id": stripe_customer_id,
+                    "stripe_subscription_id": stripe_sub_id,
+                    "plan": plan,
+                    "status": "active",
+                    "updated_at": datetime.utcnow().isoformat(),
+                }, on_conflict="user_id").execute()
+
+        elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
+            stripe_sub_id = data_obj.get("id")
+            status        = data_obj.get("status", "inactive")
+            cancel_at_end = data_obj.get("cancel_at_period_end", False)
+            period_start  = data_obj.get("current_period_start")
+            period_end    = data_obj.get("current_period_end")
+            if stripe_sub_id:
+                update_data = {
+                    "status": status,
+                    "cancel_at_period_end": cancel_at_end,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+                if period_start:
+                    update_data["current_period_start"] = datetime.utcfromtimestamp(period_start).isoformat()
+                if period_end:
+                    update_data["current_period_end"] = datetime.utcfromtimestamp(period_end).isoformat()
+                # downgrade to free if subscription cancelled/ended
+                if event_type == "customer.subscription.deleted" or status in ("canceled", "unpaid"):
+                    update_data["plan"] = "free"
+                    res = supabase.table("subscriptions").select("user_id").eq("stripe_subscription_id", stripe_sub_id).limit(1).execute()
+                    if res.data:
+                        supabase.table("users").update({"plan": "free"}).eq("id", res.data[0]["user_id"]).execute()
+                supabase.table("subscriptions").update(update_data).eq("stripe_subscription_id", stripe_sub_id).execute()
+
+    except Exception as e:
+        app.logger.error(f"Stripe webhook handler error: {e}")
+        # Return 500 so Stripe retries the event — do not swallow processing errors
+        return jsonify({"error": "Webhook handler failed, will retry"}), 500
+
+    return jsonify({"received": True})
+
+# ========== API: personas ==========
+@app.route("/api/personas", methods=["GET"])
+def personas_list():
+    user_id = session.get("user_id")
+    try:
+        # public personas + own personas
+        pub_res = supabase.table("personas").select(
+            "id,name,description,system_prompt,is_public,user_id,created_at"
+        ).eq("is_public", True).execute()
+        rows = pub_res.data or []
+        if user_id:
+            own_res = supabase.table("personas").select(
+                "id,name,description,system_prompt,is_public,user_id,created_at"
+            ).eq("user_id", user_id).eq("is_public", False).execute()
+            rows = rows + (own_res.data or [])
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/personas", methods=["POST"])
+def personas_create():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    # Pro+ only
+    try:
+        usr = supabase.table("users").select("plan").eq("id", user_id).limit(1).execute()
+        plan = (usr.data[0].get("plan") if usr.data else None) or "free"
+    except Exception:
+        plan = "free"
+    if plan == "free":
+        return jsonify({"error": "Creating personas requires a Pro plan or higher."}), 403
+    data = request.json or {}
+    name          = (data.get("name") or "").strip()
+    description   = (data.get("description") or "").strip()
+    system_prompt = (data.get("system_prompt") or "").strip()
+    is_public     = bool(data.get("is_public", False))
+    if not name or not system_prompt:
+        return jsonify({"error": "name and system_prompt are required"}), 400
+    if len(system_prompt) > 8000:
+        return jsonify({"error": "system_prompt max 8000 chars"}), 400
+    try:
+        res = supabase.table("personas").insert({
+            "user_id": user_id,
+            "name": name,
+            "description": description,
+            "system_prompt": system_prompt,
+            "is_public": is_public,
+            "created_at": datetime.utcnow().isoformat(),
+        }).execute()
+        return jsonify(res.data[0] if res.data else {"status": "created"}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/personas/<persona_id>", methods=["DELETE"])
+def personas_delete(persona_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+    try:
+        supabase.table("personas").delete().eq("id", persona_id).eq("user_id", user_id).execute()
+        return jsonify({"status": "deleted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ========== ADMIN: usage stats ==========
+@app.route("/admin/usage_stats", methods=["GET"])
+@admin_required
+def admin_usage_stats():
+    try:
+        since = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        res = supabase.table("usage_logs").select(
+            "user_id,tokens_in,tokens_out,cost_usd,logged_at,provider"
+        ).gte("logged_at", since).order("logged_at", desc=True).limit(5000).execute()
+        rows = res.data or []
+
+        # aggregate per user
+        by_user = {}
+        for r in rows:
+            uid = r.get("user_id") or "anonymous"
+            if uid not in by_user:
+                by_user[uid] = {"user_id": uid, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "calls": 0}
+            by_user[uid]["tokens_in"]  += r.get("tokens_in", 0) or 0
+            by_user[uid]["tokens_out"] += r.get("tokens_out", 0) or 0
+            by_user[uid]["cost_usd"]   += float(r.get("cost_usd", 0) or 0)
+            by_user[uid]["calls"]      += 1
+
+        # attach emails where possible
+        user_ids = [uid for uid in by_user if uid != "anonymous"]
+        if user_ids:
+            try:
+                emails_res = supabase.table("users").select("id,email").in_("id", user_ids[:200]).execute()
+                email_map = {str(r["id"]): r["email"] for r in (emails_res.data or [])}
+                for uid, entry in by_user.items():
+                    entry["email"] = email_map.get(uid, uid[:8] + "…")
+            except Exception:
+                for entry in by_user.values():
+                    entry.setdefault("email", entry["user_id"][:8] + "…")
+        else:
+            for entry in by_user.values():
+                entry.setdefault("email", "anonymous")
+
+        sorted_users = sorted(by_user.values(), key=lambda x: x["tokens_out"], reverse=True)
+        return jsonify(sorted_users[:100])
+    except Exception as e:
+        return jsonify({"error": str(e), "rows": []}), 500
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "version": "3.0"})

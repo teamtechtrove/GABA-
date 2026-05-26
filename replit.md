@@ -56,8 +56,18 @@ Live creator: **Arman** — https://portfolioofarman.netlify.app
 | `FLASK_SECRET` | (optional) Flask session secret |
 | `GROQ_API_KEY` | (optional fallback) — also stored in `api_keys` table |
 | `GITHUB_TOKEN`, `GITHUB_REPO` | (optional) for backup → GitHub push |
+| `STRIPE_SECRET_KEY` | Stripe secret key (sk_live_… or sk_test_…) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (whsec_…) — set after registering the webhook in the Stripe dashboard |
+| `STRIPE_PRO_PRICE_ID` | Stripe Price ID for the Pro plan ($9.99/mo) |
 
 API keys for OpenAI, Claude, Gemini, DeepSeek are added through the admin panel (stored in Supabase, not env vars).
+
+### Stripe webhook setup (one-time)
+1. Deploy the app so it has a public URL
+2. In the Stripe Dashboard → Developers → Webhooks → Add endpoint
+3. Set the endpoint URL to `https://<your-domain>/api/stripe/webhook`
+4. Select events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`
+5. Copy the **Signing secret** and save it as `STRIPE_WEBHOOK_SECRET`
 
 ---
 

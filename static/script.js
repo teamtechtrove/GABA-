@@ -111,6 +111,26 @@ function showToast(msg, type=''){
   setTimeout(() => t.remove(), 2700);
 }
 
+// ===== mode labels =====
+const MODE_LABELS = {
+  coding:    '⌨ CODING',
+  reasoning: '🧠 REASONING',
+  research:  '🌐 RESEARCH',
+  creative:  '✦ CREATIVE',
+  analysis:  '📊 ANALYSIS',
+  general:   'READY',
+  safety:    '⚠ SAFE',
+};
+const MODE_COLORS = {
+  coding:    'var(--ice)',
+  reasoning: 'var(--flame)',
+  research:  'var(--acid)',
+  creative:  'var(--glow-2)',
+  analysis:  'var(--warn)',
+  general:   'var(--glow-2)',
+  safety:    'var(--acid)',
+};
+
 // ===== send =====
 async function sendMessage(){
   const ta = $('userInput');
@@ -128,26 +148,75 @@ async function sendMessage(){
 
   $('typingBar').classList.add('on');
   document.querySelector('.live-dot')?.classList.add('thinking');
-  $('modelLabel').textContent = 'THINKING';
+  $('modelLabel').textContent = 'THINKING…';
+  $('modelLabel').style.color = '';
   scrollChat();
 
+  // Create a streaming bot bubble immediately
+  const { row, bubble } = createStreamBubble();
+
   try {
-    const res = await fetch('/chat', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: msg, history: conversation.slice(-30) }),
     });
-    const data = await res.json();
-    const reply = data.reply || 'No response.';
-    const provider = data.provider || 'gaba';
-    appendMsg(reply, 'bot', provider);
-    conversation.push({ role:'assistant', content: reply });
-    if (cfg.autoSave) localStorage.setItem(CONV_PREFIX + currentSid, JSON.stringify(conversation));
-    renderHistory();
-    $('modelLabel').textContent = provider.toUpperCase();
-  } catch (e){
-    appendMsg('Network error — please try again.', 'bot', 'err');
+
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullReply = '';
+    let finalProvider = 'gaba';
+    let finalMode = 'general';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (ev.error) {
+          appendStreamToken(bubble, `⚠️ ${ev.error}`);
+          break;
+        }
+        if (ev.mode && ev.started) {
+          finalMode = ev.mode;
+          $('modelLabel').textContent = MODE_LABELS[ev.mode] || ev.mode.toUpperCase();
+          $('modelLabel').style.color = MODE_COLORS[ev.mode] || '';
+          // Update badge in the bubble header
+          const badge = row.querySelector('.prov-badge');
+          if (badge) badge.textContent = ev.mode;
+        }
+        if (ev.token) {
+          fullReply += ev.token;
+          appendStreamToken(bubble, ev.token);
+        }
+        if (ev.done) {
+          finalProvider = ev.provider || 'gaba';
+          finalMode     = ev.mode     || finalMode;
+          if (ev.reply) fullReply = ev.reply; // use sanitized server reply
+          finalizeStreamBubble(row, bubble, finalProvider, finalMode);
+          conversation.push({ role: 'assistant', content: fullReply });
+          if (cfg.autoSave) localStorage.setItem(CONV_PREFIX + currentSid, JSON.stringify(conversation));
+          renderHistory();
+          $('modelLabel').textContent = (MODE_LABELS[finalMode] || finalProvider.toUpperCase()).replace(/^[^ ]+ /, '');
+          $('modelLabel').style.color = MODE_COLORS[finalMode] || '';
+        }
+      }
+    }
+  } catch (e) {
+    finalizeStreamBubble(row, bubble, 'err', 'general');
+    appendStreamToken(bubble, 'Network error — please try again.');
     $('modelLabel').textContent = 'ERROR';
+    $('modelLabel').style.color = 'var(--kill)';
   } finally {
     $('typingBar').classList.remove('on');
     document.querySelector('.live-dot')?.classList.remove('thinking');
@@ -155,6 +224,90 @@ async function sendMessage(){
     $('sendBtn').disabled = false;
     ta.focus();
   }
+}
+
+// ===== streaming bubble helpers =====
+function createStreamBubble(){
+  const msgs = $('messages');
+  const row = document.createElement('div');
+  row.className = 'msg-row bot streaming';
+
+  const av = document.createElement('div');
+  av.className = 'msg-av';
+  av.textContent = '⚡';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  meta.innerHTML = `<span>GABA · ${time}</span><span class="prov-badge">…</span>`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble stream-bubble';
+  // streaming cursor
+  bubble.innerHTML = '<span class="stream-cursor"></span>';
+
+  body.appendChild(meta);
+  body.appendChild(bubble);
+  row.appendChild(av);
+  row.appendChild(body);
+  msgs.appendChild(row);
+  scrollChat();
+  return { row, bubble };
+}
+
+// Raw text buffer for the streaming bubble (we re-render markdown at the end)
+const _streamRaw = new WeakMap();
+
+function appendStreamToken(bubble, token){
+  const raw = (_streamRaw.get(bubble) || '') + token;
+  _streamRaw.set(bubble, raw);
+  // Show plain text while streaming for speed; cursor stays at end
+  const cursor = bubble.querySelector('.stream-cursor');
+  if (cursor) {
+    // Insert text node before cursor
+    const tn = document.createTextNode(token.replace(/\n/g, '\n'));
+    bubble.insertBefore(tn, cursor);
+  } else {
+    bubble.appendChild(document.createTextNode(token));
+  }
+  scrollChat();
+}
+
+function finalizeStreamBubble(row, bubble, provider, mode){
+  // Remove streaming cursor
+  const cursor = bubble.querySelector('.stream-cursor');
+  if (cursor) cursor.remove();
+  row.classList.remove('streaming');
+
+  // Re-render with full markdown
+  const raw = _streamRaw.get(bubble) || bubble.textContent || '';
+  bubble.innerHTML = formatMsg(raw);
+  addCopyButtons(bubble);
+
+  // Update meta badge
+  const badge = row.querySelector('.prov-badge');
+  if (badge) {
+    let cls = '';
+    if (provider === 'safety') cls = ' safe';
+    else if (provider === 'err') cls = ' err';
+    badge.className = 'prov-badge' + cls;
+    badge.textContent = provider;
+  }
+
+  // Add mode chip
+  if (mode && mode !== 'general' && mode !== 'safety') {
+    const meta = row.querySelector('.msg-meta');
+    if (meta) {
+      const chip = document.createElement('span');
+      chip.className = `mode-chip mode-${mode}`;
+      chip.textContent = mode;
+      meta.appendChild(chip);
+    }
+  }
+  scrollChat();
 }
 
 // ===== render =====

@@ -6,7 +6,7 @@ import hashlib
 import hmac
 from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, session, g
+from flask import Flask, request, jsonify, render_template, session, g, Response, stream_with_context
 from flask_cors import CORS
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
@@ -173,23 +173,130 @@ def get_provider_order():
 def save_provider_order(order):
     supabase.table("system_settings").upsert({"key": "provider_order", "value": json.dumps(order)}).execute()
 
+# ========== MODEL REGISTRY (real models per provider + mode) ==========
+MODEL_REGISTRY = {
+    "groq": {
+        "general":   "llama-3.3-70b-versatile",
+        "coding":    "llama-3.3-70b-versatile",
+        "reasoning": "llama-3.3-70b-versatile",
+        "creative":  "llama-3.3-70b-versatile",
+        "research":  "llama-3.3-70b-versatile",
+        "analysis":  "llama-3.3-70b-versatile",
+        "fast":      "llama-3.1-8b-instant",
+    },
+    "openai": {
+        "general":   "gpt-4o-mini",
+        "coding":    "gpt-4o",
+        "reasoning": "gpt-4o",
+        "creative":  "gpt-4o-mini",
+        "research":  "gpt-4o-mini",
+        "analysis":  "gpt-4o",
+        "fast":      "gpt-4o-mini",
+    },
+    "claude": {
+        "general":   "claude-3-5-haiku-20241022",
+        "coding":    "claude-3-5-sonnet-20241022",
+        "reasoning": "claude-3-5-sonnet-20241022",
+        "creative":  "claude-3-5-sonnet-20241022",
+        "research":  "claude-3-5-haiku-20241022",
+        "analysis":  "claude-3-5-sonnet-20241022",
+        "fast":      "claude-3-5-haiku-20241022",
+    },
+    "gemini": {
+        "general":   "gemini-1.5-flash",
+        "coding":    "gemini-1.5-pro",
+        "reasoning": "gemini-1.5-pro",
+        "creative":  "gemini-1.5-flash",
+        "research":  "gemini-1.5-pro",
+        "analysis":  "gemini-1.5-pro",
+        "fast":      "gemini-1.5-flash",
+    },
+    "deepseek": {
+        "general":   "deepseek-chat",
+        "coding":    "deepseek-chat",
+        "reasoning": "deepseek-reasoner",
+        "creative":  "deepseek-chat",
+        "research":  "deepseek-chat",
+        "analysis":  "deepseek-reasoner",
+        "fast":      "deepseek-chat",
+    },
+}
+
+# Cost per 1M tokens (approximate, for usage tracking)
+COST_TABLE = {
+    "groq":     {"in": 0.59,  "out": 0.79},
+    "openai":   {"in": 0.15,  "out": 0.60},
+    "claude":   {"in": 0.25,  "out": 1.25},
+    "gemini":   {"in": 0.075, "out": 0.30},
+    "deepseek": {"in": 0.14,  "out": 0.28},
+}
+
+def analyze_query(text: str) -> str:
+    """Return query mode: coding | reasoning | research | creative | analysis | general."""
+    lower = text.lower()
+    code_kw = [
+        "code", "function", "debug", "error", "bug", "program", "script",
+        "python", "javascript", "typescript", "java", "c++", "rust", "go",
+        "algorithm", "class", "method", "api", "sql", "regex", "implement",
+        "refactor", "compile", "syntax", "library", "framework", "git",
+        "deploy", "docker", "bash", "shell", "html", "css", "react",
+    ]
+    math_kw = [
+        "calculate", "solve", "equation", "proof", "derive", "integral",
+        "derivative", "matrix", "probability", "statistics", "geometry",
+        "algebra", "calculus", "theorem", "formula", "math", "compute",
+        "optimize", "maximize", "minimize", "differentiate",
+    ]
+    search_kw = [
+        "search", "find online", "google", "latest", "news", "current",
+        "today", "recent", "2024", "2025", "2026", "what happened",
+        "who is", "where is", "price of", "weather",
+    ]
+    creative_kw = [
+        "write a story", "write a poem", "write an essay", "creative writing",
+        "fiction", "novel", "lyrics", "blog post", "write me a", "compose",
+        "generate a story", "invent", "imagine",
+    ]
+    if any(k in lower for k in code_kw):
+        return "coding"
+    if any(k in lower for k in math_kw):
+        return "reasoning"
+    if any(k in lower for k in search_kw):
+        return "research"
+    if any(k in lower for k in creative_kw):
+        return "creative"
+    if len(text) > 600:
+        return "analysis"
+    return "general"
+
+def smart_model_for(provider: str, mode: str) -> str:
+    """Return the best real model name for this provider + mode."""
+    registry = MODEL_REGISTRY.get(provider, {})
+    return registry.get(mode) or registry.get("general") or None
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars per token)."""
+    return max(1, len(text) // 4)
+
 # ========== LLM CALLERS (All major providers) ==========
-def call_llm(messages, provider="groq", model=None, timeout=30):
+def call_llm(messages, provider="groq", model=None, mode="general", timeout=30):
     api_key = get_active_api_key(provider)
     if not api_key:
         return None, f"No active key for {provider}"
+    # Smart model selection: use registry if no explicit model given
+    resolved_model = model or smart_model_for(provider, mode)
     try:
         if provider == "groq":
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            payload = {"model": model or "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 2048}
+            payload = {"model": resolved_model or "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"], None
         elif provider == "openai":
             url = "https://api.openai.com/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            payload = {"model": model or "gpt-4o-mini", "messages": messages, "max_tokens": 2048}
+            payload = {"model": resolved_model or "gpt-4o-mini", "messages": messages, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"], None
@@ -198,12 +305,13 @@ def call_llm(messages, provider="groq", model=None, timeout=30):
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
             system = next((m["content"] for m in messages if m["role"] == "system"), get_active_system_prompt())
             user_msgs = [m for m in messages if m["role"] != "system"]
-            payload = {"model": model or "claude-3-haiku-20240307", "system": system, "messages": user_msgs, "max_tokens": 2048}
+            payload = {"model": resolved_model or "claude-3-5-haiku-20241022", "system": system, "messages": user_msgs, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
             r.raise_for_status()
             return r.json()["content"][0]["text"], None
         elif provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+            gmodel = resolved_model or "gemini-1.5-flash"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{gmodel}:generateContent?key={api_key}"
             parts = [{"text": m["content"]} for m in messages]
             payload = {"contents": [{"parts": parts}], "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}}
             r = requests.post(url, json=payload, timeout=timeout)
@@ -212,7 +320,7 @@ def call_llm(messages, provider="groq", model=None, timeout=30):
         elif provider == "deepseek":
             url = "https://api.deepseek.com/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            payload = {"model": model or "deepseek-chat", "messages": messages, "max_tokens": 2048}
+            payload = {"model": resolved_model or "deepseek-chat", "messages": messages, "max_tokens": 2048}
             r = requests.post(url, headers=headers, json=payload, timeout=timeout)
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"], None
@@ -220,6 +328,104 @@ def call_llm(messages, provider="groq", model=None, timeout=30):
             return None, f"Unknown provider {provider}"
     except Exception as e:
         return None, str(e)[:200]
+
+def call_llm_stream(messages, provider="groq", model=None, mode="general", timeout=60):
+    """Generator: yields text tokens from the provider's streaming API.
+    Supports Groq, OpenAI, DeepSeek (OpenAI-compatible SSE) and Anthropic SSE.
+    Falls back to full response for Gemini.
+    Yields tuples: (token_text, is_done, error_or_none)
+    """
+    api_key = get_active_api_key(provider)
+    if not api_key:
+        yield ("", True, f"No active key for {provider}")
+        return
+    resolved_model = model or smart_model_for(provider, mode)
+    try:
+        if provider in ("groq", "openai", "deepseek"):
+            if provider == "groq":
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                default_model = "llama-3.3-70b-versatile"
+            elif provider == "openai":
+                url = "https://api.openai.com/v1/chat/completions"
+                default_model = "gpt-4o-mini"
+            else:
+                url = "https://api.deepseek.com/v1/chat/completions"
+                default_model = "deepseek-chat"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": resolved_model or default_model,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "stream": True,
+            }
+            r = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
+            r.raise_for_status()
+            for raw in r.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data: "):
+                    continue
+                chunk_str = line[6:].strip()
+                if chunk_str == "[DONE]":
+                    yield ("", True, None)
+                    return
+                try:
+                    chunk = json.loads(chunk_str)
+                    delta = chunk["choices"][0].get("delta", {})
+                    token = delta.get("content") or ""
+                    if token:
+                        yield (token, False, None)
+                except Exception:
+                    continue
+            yield ("", True, None)
+
+        elif provider == "claude":
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+            system = next((m["content"] for m in messages if m["role"] == "system"), get_active_system_prompt())
+            user_msgs = [m for m in messages if m["role"] != "system"]
+            payload = {
+                "model": resolved_model or "claude-3-5-haiku-20241022",
+                "system": system,
+                "messages": user_msgs,
+                "max_tokens": 2048,
+                "stream": True,
+            }
+            r = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
+            r.raise_for_status()
+            for raw in r.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data: "):
+                    continue
+                chunk_str = line[6:].strip()
+                try:
+                    ev = json.loads(chunk_str)
+                    if ev.get("type") == "content_block_delta":
+                        token = ev.get("delta", {}).get("text", "")
+                        if token:
+                            yield (token, False, None)
+                    elif ev.get("type") == "message_stop":
+                        yield ("", True, None)
+                        return
+                except Exception:
+                    continue
+            yield ("", True, None)
+
+        else:
+            # Gemini — no streaming: get full response and yield as one chunk
+            reply, err = call_llm(messages, provider, model=resolved_model, mode=mode, timeout=timeout)
+            if err:
+                yield ("", True, err)
+            else:
+                yield (reply, False, None)
+                yield ("", True, None)
+
+    except Exception as e:
+        yield ("", True, str(e)[:200])
 
 # ========== WEB SEARCH TOOL (DuckDuckGo HTML scraper) ==========
 def web_search(query):
@@ -267,7 +473,10 @@ def _proxy_to_worker(messages, access_token, model="hormulse-fast"):
 # ========== AGENT WITH TOOL USE ==========
 def agent_response(user_input, history, user_id=None):
     if is_dangerous(user_input):
-        return {"reply": "⚠️ I can't respond to that. Please keep our conversation safe.", "provider": "safety"}
+        return {"reply": "⚠️ I can't respond to that. Please keep our conversation safe.", "provider": "safety", "mode": "safety"}
+
+    # Detect query mode BEFORE possible search augmentation
+    mode = analyze_query(user_input)
 
     # Web search (only if feature enabled)
     if get_setting("feature_web_search", True, bool):
@@ -277,6 +486,7 @@ def agent_response(user_input, history, user_id=None):
             if query:
                 search_result = web_search(query)
                 user_input = f"User asked to search for: {query}\nSearch results:\n{search_result}\nBased on these results, answer the user's query naturally."
+                mode = "research"
 
     messages = [{"role": "system", "content": get_active_system_prompt()}] + history[-20:] + [{"role": "user", "content": user_input}]
 
@@ -286,9 +496,8 @@ def agent_response(user_input, history, user_id=None):
         if access_token:
             try:
                 reply, provider = _proxy_to_worker(messages, access_token)
-                return {"reply": sanitize_output(reply), "provider": provider}
+                return {"reply": sanitize_output(reply), "provider": provider, "mode": mode}
             except Exception as worker_err:
-                # Worker unavailable — fall through to direct provider calls
                 app.logger.warning(f"Worker proxy failed, falling back: {worker_err}")
 
     # ── Direct provider fallback (always works without WORKER_URL) ──
@@ -297,10 +506,10 @@ def agent_response(user_input, history, user_id=None):
     for provider in provider_order:
         if provider in disabled:
             continue
-        reply, err = call_llm(messages, provider)
+        reply, err = call_llm(messages, provider, mode=mode)
         if reply:
-            return {"reply": sanitize_output(reply), "provider": provider}
-    return {"reply": "All AI services are unavailable. Try again later.", "provider": "none"}
+            return {"reply": sanitize_output(reply), "provider": provider, "mode": mode}
+    return {"reply": "All AI services are unavailable. Try again later.", "provider": "none", "mode": mode}
 
 # ========== SUPABASE AUTH (User accounts) ==========
 @app.route("/auth/signup", methods=["POST"])
@@ -362,7 +571,6 @@ def chat():
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
     result = agent_response(user_msg, history, user_id)
-    # Save conversation to Supabase if user logged in
     if user_id:
         try:
             supabase.table("conversations").insert({
@@ -375,6 +583,107 @@ def chat():
         except:
             pass
     return jsonify(result)
+
+# ========== STREAMING CHAT ROUTE (SSE) ==========
+@app.route("/chat/stream", methods=["POST"])
+def chat_stream():
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    if is_rate_limited(client_ip):
+        def _rate_err():
+            yield f"data: {json.dumps({'error': 'Rate limit exceeded', 'done': True})}\n\n"
+        return Response(stream_with_context(_rate_err()), mimetype="text/event-stream",
+                        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+    data = request.json or {}
+    user_msg = (data.get("message") or "").strip()
+    history  = data.get("history", [])
+    user_id  = session.get("user_id")
+
+    if not user_msg:
+        def _empty():
+            yield f"data: {json.dumps({'error': 'Empty message', 'done': True})}\n\n"
+        return Response(stream_with_context(_empty()), mimetype="text/event-stream",
+                        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+    # Capture session data before entering generator (avoids context issues)
+    access_token  = session.get("access_token")
+    worker_url    = WORKER_URL
+    sys_prompt    = get_active_system_prompt()
+    provider_order = get_provider_order()
+    disabled      = set(get_setting("disabled_providers", [], list) or [])
+    web_search_on = get_setting("feature_web_search", True, bool)
+
+    def generate():
+        nonlocal user_msg
+        if is_dangerous(user_msg):
+            safe_msg = "⚠️ I can't respond to that. Please keep our conversation safe."
+            yield f"data: {json.dumps({'token': safe_msg, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'provider': 'safety', 'mode': 'safety'})}\n\n"
+            return
+
+        mode = analyze_query(user_msg)
+
+        # Web search augmentation
+        if web_search_on:
+            lower = user_msg.lower()
+            if "search" in lower or "find online" in lower or "google" in lower:
+                query = user_msg.replace("search","").replace("find online","").replace("google","").strip()
+                if query:
+                    search_hint = "🔍 Searching the web…\n\n"
+                    yield f"data: {json.dumps({'token': search_hint, 'done': False})}\n\n"
+                    search_result = web_search(query)
+                    user_msg = f"User asked to search for: {query}\nSearch results:\n{search_result}\nBased on these results, answer the user's query naturally."
+                    mode = "research"
+
+        messages = [{"role": "system", "content": sys_prompt}] + history[-20:] + [{"role": "user", "content": user_msg}]
+
+        # Send mode early so the UI can update the label
+        yield f"data: {json.dumps({'mode': mode, 'started': True})}\n\n"
+
+        full_reply = []
+        used_provider = "none"
+
+        for provider in provider_order:
+            if provider in disabled:
+                continue
+            try:
+                for token, done, err in call_llm_stream(messages, provider, mode=mode):
+                    if err:
+                        break
+                    if token:
+                        full_reply.append(token)
+                        yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+                    if done:
+                        used_provider = provider
+                        complete_reply = sanitize_output("".join(full_reply))
+                        # Log to Supabase async (best-effort, no crash on fail)
+                        try:
+                            if user_id:
+                                supabase.table("conversations").insert({
+                                    "user_id": user_id,
+                                    "user_message": data.get("message",""),
+                                    "bot_reply": complete_reply,
+                                    "provider_used": provider,
+                                    "created_at": datetime.utcnow().isoformat()
+                                }).execute()
+                        except Exception:
+                            pass
+                        yield f"data: {json.dumps({'done': True, 'provider': provider, 'mode': mode, 'reply': complete_reply})}\n\n"
+                        return
+                if full_reply:
+                    break
+            except Exception:
+                continue
+
+        if not full_reply:
+            yield f"data: {json.dumps({'token': 'All AI services are unavailable. Try again later.', 'done': False})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'provider': 'none', 'mode': mode, 'reply': 'All AI services are unavailable. Try again later.'})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 # ========== RENDERING ==========
 @app.route("/")

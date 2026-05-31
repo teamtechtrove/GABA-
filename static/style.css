@@ -427,6 +427,32 @@ body.compact .messages{gap:14px}
 .drag-item.dragging{opacity:.4}
 .drag-handle{color:var(--chalk-4);margin-left:auto;font-size:14px}
 
+/* ===== streaming cursor & mode chips ===== */
+.stream-cursor{
+  display:inline-block;width:2px;height:1.1em;
+  background:var(--glow-2);border-radius:2px;
+  vertical-align:text-bottom;margin-left:2px;
+  animation:stream-blink .55s step-end infinite;
+}
+@keyframes stream-blink{0%,100%{opacity:1}50%{opacity:0}}
+
+.msg-row.streaming .msg-bubble{
+  white-space:pre-wrap;font-family:var(--mono);
+  background:var(--ink-3);color:var(--chalk);
+  border:1px solid rgba(108,71,255,.15);border-bottom-left-radius:4px;
+}
+
+/* mode chips inside msg-meta */
+.mode-chip{
+  font-size:9px;font-weight:700;font-family:var(--mono);letter-spacing:.07em;
+  text-transform:uppercase;padding:2px 7px;border-radius:20px;
+}
+.mode-chip.mode-coding   { background:rgba(56,189,248,.12);color:var(--ice);border:1px solid rgba(56,189,248,.3); }
+.mode-chip.mode-reasoning{ background:rgba(255,107,53,.12);color:var(--flame);border:1px solid rgba(255,107,53,.3); }
+.mode-chip.mode-research { background:rgba(57,255,135,.12);color:var(--acid);border:1px solid rgba(57,255,135,.3); }
+.mode-chip.mode-creative { background:rgba(139,111,255,.12);color:var(--glow-2);border:1px solid rgba(139,111,255,.3); }
+.mode-chip.mode-analysis { background:rgba(251,191,36,.12);color:var(--warn);border:1px solid rgba(251,191,36,.3); }
+
 /* ===== toast ===== */
 .toast{
   position:fixed;bottom:26px;right:22px;
